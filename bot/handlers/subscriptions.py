@@ -21,8 +21,8 @@ router = Router(name="subscriptions")
 
 
 _GITHUB_REPO_HINT = (
-    "Укажите репозиторий: <code>/subscribe owner/repo</code>\n"
-    "Или полный URL: <code>/subscribe https://github.com/owner/repo</code>"
+    "Provide a repo: <code>/subscribe owner/repo</code>\n"
+    "Or a full URL: <code>/subscribe https://github.com/owner/repo</code>"
 )
 
 
@@ -73,7 +73,7 @@ def setup_subscriptions_handler(
             return
         if not _is_admin(message.from_user.id):
             await message.reply(
-                "🚫 Управление подписками доступно только администраторам.",
+                "🚫 Subscription management is admin-only.",
                 parse_mode="HTML",
             )
             return
@@ -88,14 +88,14 @@ def setup_subscriptions_handler(
         if added:
             logger.info("subscribed chat %s to %s", chat_id, repo)
             await message.reply(
-                f"✅ Чат подписан на <code>{repo}</code>.\n\n"
-                "Теперь webhook-события (PR opened/sync/reopened) будут "
-                "автоматически проверяться и репорт придёт сюда.",
+                f"✅ Chat subscribed to <code>{repo}</code>.\n\n"
+                "Webhook events (PR opened / synchronize / reopened) will now "
+                "trigger an automatic CI run, with the report posted here.",
                 parse_mode="HTML",
             )
         else:
             await message.reply(
-                f"ℹ️ Чат уже подписан на <code>{repo}</code>.",
+                f"ℹ️ Chat is already subscribed to <code>{repo}</code>.",
                 parse_mode="HTML",
             )
 
@@ -105,7 +105,7 @@ def setup_subscriptions_handler(
             return
         if not _is_admin(message.from_user.id):
             await message.reply(
-                "🚫 Управление подписками доступно только администраторам.",
+                "🚫 Subscription management is admin-only.",
                 parse_mode="HTML",
             )
             return
@@ -113,7 +113,7 @@ def setup_subscriptions_handler(
         repo = _parse_repo_arg(message.text)
         if not repo:
             await message.reply(
-                "Укажите репозиторий: <code>/unsubscribe owner/repo</code>",
+                "Provide a repo: <code>/unsubscribe owner/repo</code>",
                 parse_mode="HTML",
             )
             return
@@ -122,11 +122,11 @@ def setup_subscriptions_handler(
         if removed:
             logger.info("unsubscribed chat %s from %s", message.chat.id, repo)
             await message.reply(
-                f"✅ Чат отписан от <code>{repo}</code>.", parse_mode="HTML"
+                f"✅ Chat unsubscribed from <code>{repo}</code>.", parse_mode="HTML"
             )
         else:
             await message.reply(
-                f"ℹ️ Чат не был подписан на <code>{repo}</code>.",
+                f"ℹ️ Chat wasn't subscribed to <code>{repo}</code>.",
                 parse_mode="HTML",
             )
 
@@ -135,13 +135,13 @@ def setup_subscriptions_handler(
         subs = store.list_for_chat(message.chat.id)
         if not subs:
             await message.reply(
-                "📋 В этом чате нет активных подписок.\n\n"
-                "Админ может добавить: <code>/subscribe owner/repo</code>",
+                "📋 No active subscriptions in this chat.\n\n"
+                "An admin can add one with: <code>/subscribe owner/repo</code>",
                 parse_mode="HTML",
             )
             return
 
-        lines = ["📋 <b>Подписки этого чата:</b>", ""]
+        lines = ["📋 <b>This chat's subscriptions:</b>", ""]
         for s in subs:
             lines.append(f"• <code>{s.repo_full_name}</code>")
         await message.reply("\n".join(lines), parse_mode="HTML")

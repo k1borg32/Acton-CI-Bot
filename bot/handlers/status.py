@@ -18,9 +18,9 @@ def setup_status_handler(queue: JobQueue) -> Router:
         active = queue.active_jobs
         pending = queue.pending_jobs
         await message.reply(
-            f"📊 <b>Статус очереди</b>\n\n"
-            f"🔄 Активных задач: <b>{active}</b>\n"
-            f"📋 В очереди: <b>{pending}</b>",
+            f"📊 <b>Queue status</b>\n\n"
+            f"🔄 Active jobs: <b>{active}</b>\n"
+            f"📋 Queued: <b>{pending}</b>",
             parse_mode="HTML",
         )
 

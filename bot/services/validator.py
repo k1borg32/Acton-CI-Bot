@@ -79,8 +79,8 @@ def parse_repo_url(url: str) -> RepoInfo:
             )
 
     raise ValidationError(
-        "❌ Неподдерживаемый URL.\n\n"
-        "Поддерживаются:\n"
+        "❌ Unsupported URL.\n\n"
+        "Supported hosts:\n"
         "• `https://github.com/owner/repo`\n"
         "• `https://gitlab.com/owner/repo`\n"
         "• `https://bitbucket.org/owner/repo`"
@@ -130,9 +130,9 @@ async def validate_repo(url: str, max_size_kb: int = 51200) -> RepoInfo:
         size_mb = size / 1024
         limit_mb = max_size_kb / 1024
         raise ValidationError(
-            f"❌ Репозиторий слишком большой: {size_mb:.0f} MB "
-            f"(лимит: {limit_mb:.0f} MB).\n\n"
-            "Попробуйте репозиторий поменьше или обратитесь к администратору."
+            f"❌ Repository is too large: {size_mb:.0f} MB "
+            f"(limit: {limit_mb:.0f} MB).\n\n"
+            "Try a smaller repo, or ask an admin to raise the limit."
         )
 
     return info

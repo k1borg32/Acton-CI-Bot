@@ -151,7 +151,7 @@ async def t_queue_per_user_hourly_limit() -> None:
     try:
         await q.acquire(user_id=42)
     except RateLimitExceeded as e:
-        assert_contains(e.user_message, "Лимит", "hourly limit msg")
+        assert_contains(e.user_message, "Rate limit", "hourly limit msg")
         return
     raise AssertionError("expected hourly limit to fire")
 
@@ -162,7 +162,7 @@ async def t_queue_per_user_concurrent_limit() -> None:
     try:
         await q.acquire(user_id=7)  # already has one active
     except RateLimitExceeded as e:
-        assert_contains(e.user_message, "активная проверка", "concurrent limit msg")
+        assert_contains(e.user_message, "active check", "concurrent limit msg")
         q.release(user_id=7)
         return
     raise AssertionError("expected concurrent limit to fire")
@@ -210,7 +210,7 @@ def t_formatter_start_help() -> None:
 
 
 def t_formatter_queue_position() -> None:
-    assert_contains(format_queue_position(0), "Запускаю", "running message")
+    assert_contains(format_queue_position(0), "Running your check", "running message")
     assert_contains(format_queue_position(2), "#2", "queue position #2")
 
 
@@ -256,7 +256,7 @@ def t_formatter_not_an_acton_project() -> None:
         StepResult("fmt", -1, "", "", 0, skipped=True),
     ]
     out = format_report(r)
-    assert_contains(out, "Это не Acton-проект", "friendly not-acton message")
+    assert_contains(out, "Not an Acton project", "friendly not-acton message")
     if "Acton.toml not found" in out:
         raise AssertionError("raw error leaked into not-an-acton-project report")
 
@@ -448,7 +448,7 @@ async def t_runner_tolk_bench_pipeline() -> None:
     if result.error is not None:
         raise AssertionError(f"unexpected clone error: {result.error}")
     rendered = format_report(result)
-    assert_contains(rendered, "Это не Acton-проект", "tolk-bench → friendly msg")
+    assert_contains(rendered, "Not an Acton project", "tolk-bench → friendly msg")
 
 
 async def t_runner_acton_new_happy_path() -> None:

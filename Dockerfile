@@ -32,6 +32,11 @@ COPY . .
 # Data directory for SQLite
 RUN mkdir -p /app/data && chown botuser:botuser /app/data
 
-USER botuser
+# Entrypoint runs as root, fixes ownership on bind-mounted /app/data
+# (so Coolify-style host dirs that start root-owned don't break SQLite),
+# then drops to botuser via runuser before exec'ing the CMD.
+COPY docker/bot-entrypoint.sh /usr/local/bin/bot-entrypoint.sh
+RUN chmod +x /usr/local/bin/bot-entrypoint.sh
 
+ENTRYPOINT ["/usr/local/bin/bot-entrypoint.sh"]
 CMD ["python", "-m", "bot.main"]

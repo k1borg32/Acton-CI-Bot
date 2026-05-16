@@ -22,11 +22,13 @@ from aiogram.types import BotCommand
 from aiohttp import web
 
 from bot.config import AppConfig
+from bot.handlers.admin import setup_admin_handler
 from bot.handlers.check import setup_check_handler
 from bot.handlers.common import router as common_router
 from bot.handlers.status import setup_status_handler
 from bot.handlers.subscriptions import setup_subscriptions_handler
 from bot.services.queue import JobQueue
+from bot.services.stats import Stats
 from bot.services.subscriptions import SubscriptionStore
 from bot.services.webhook import make_webhook_app
 
@@ -72,21 +74,26 @@ async def main() -> None:
     )
     queue = JobQueue(config.rate_limit)
     subscriptions = SubscriptionStore(config.db_path)
+    stats = Stats()
 
     dp = Dispatcher()
     dp.include_router(common_router)
-    dp.include_router(setup_check_handler(config, queue))
+    dp.include_router(setup_check_handler(config, queue, stats))
     dp.include_router(setup_status_handler(queue))
     dp.include_router(setup_subscriptions_handler(subscriptions, config.bot.admin_ids))
+    dp.include_router(setup_admin_handler(
+        stats=stats, queue=queue, subscriptions=subscriptions,
+        admin_ids=config.bot.admin_ids,
+    ))
 
     await bot.set_my_commands([
-        BotCommand(command="start", description="Приветствие"),
-        BotCommand(command="check", description="Проверить репозиторий"),
-        BotCommand(command="status", description="Статус очереди"),
-        BotCommand(command="subscribe", description="Подписать чат на webhook'и репо"),
-        BotCommand(command="unsubscribe", description="Отписать чат"),
-        BotCommand(command="subscriptions", description="Список подписок чата"),
-        BotCommand(command="help", description="Справка"),
+        BotCommand(command="start", description="Welcome message"),
+        BotCommand(command="check", description="Run CI on a repository"),
+        BotCommand(command="status", description="Queue status"),
+        BotCommand(command="subscribe", description="Auto-check a repo's PRs in this chat"),
+        BotCommand(command="unsubscribe", description="Stop auto-checks in this chat"),
+        BotCommand(command="subscriptions", description="List this chat's subscriptions"),
+        BotCommand(command="help", description="Full reference"),
     ])
 
     http_app = make_webhook_app(
@@ -94,6 +101,7 @@ async def main() -> None:
         config=config,
         subscriptions=subscriptions,
         queue=queue,
+        stats=stats,
         secret=config.webhook.secret,
     )
     if not config.webhook.secret:

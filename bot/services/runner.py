@@ -202,13 +202,16 @@ async def _run_acton_step(
 
     # Mount is RW because `acton build` writes artifacts into the project
     # directory. Containment comes from --network=none, --rm, --pids-limit,
-    # --memory, --cpus and the project dir being an ephemeral host tempdir.
+    # --memory, --cpus, --cap-drop, --security-opt=no-new-privileges, and
+    # the project dir being an ephemeral host tempdir.
     cmd = [
         "docker", "run", "--rm",
         "--memory", config.container_memory,
         "--cpus", config.container_cpus,
         "--pids-limit", config.container_pids_limit,
         "--network", "none",
+        "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges",
         "--tmpfs", "/tmp:size=128m,exec",
         "-v", f"{docker_project_dir}:/workspace",
         "-w", "/workspace",

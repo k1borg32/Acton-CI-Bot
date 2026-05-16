@@ -35,7 +35,7 @@ async def main() -> int:
         f.write(report)
     print("\n[smoke] formatted report written to scripts/_smoke_report.txt")
 
-    if "Это не Acton-проект" in report:
+    if "Not an Acton project" in report:
         print("\n[smoke] PASS: friendly 'not an Acton project' message rendered")
         return 0
     print("\n[smoke] FAIL: expected friendly message was not rendered")

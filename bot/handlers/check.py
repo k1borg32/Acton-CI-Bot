@@ -12,6 +12,7 @@ from bot.config import AppConfig
 from bot.services.formatter import format_report, format_queue_position
 from bot.services.queue import JobQueue, RateLimitExceeded
 from bot.services.runner import run_acton_pipeline
+from bot.services.stats import Stats
 from bot.services.validator import validate_repo, ValidationError
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ def _extract_url(message: Message) -> str | None:
     return None
 
 
-def setup_check_handler(config: AppConfig, queue: JobQueue) -> Router:
+def setup_check_handler(config: AppConfig, queue: JobQueue, stats: Stats) -> Router:
     """Register the /check handler with dependencies."""
 
     @router.message(Command("check"))
@@ -45,7 +46,7 @@ def setup_check_handler(config: AppConfig, queue: JobQueue) -> Router:
         url = _extract_url(message)
         if not url:
             await message.reply(
-                "❓ Укажите URL репозитория:\n"
+                "❓ Provide a repository URL:\n"
                 "<code>/check https://github.com/owner/repo</code>",
                 parse_mode="HTML",
             )
@@ -75,6 +76,7 @@ def setup_check_handler(config: AppConfig, queue: JobQueue) -> Router:
         try:
             # Run the pipeline
             result = await run_acton_pipeline(repo_info, config.runner)
+            stats.record_check(source="manual", success=result.success)
 
             # Send report
             report = format_report(result)
@@ -86,10 +88,12 @@ def setup_check_handler(config: AppConfig, queue: JobQueue) -> Router:
             except Exception:
                 pass
 
-        except Exception:
+        except Exception as e:
             logger.exception("Pipeline error for %s", url)
+            stats.record_error("check_handler", e)
+            stats.record_check(source="manual", success=False)
             await message.reply(
-                "💥 Внутренняя ошибка. Попробуйте позже.",
+                "💥 Internal error. Please try again later.",
                 parse_mode="HTML",
             )
         finally:

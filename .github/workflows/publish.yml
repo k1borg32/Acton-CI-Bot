@@ -1,0 +1,80 @@
+name: Publish images to GHCR
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  bot:
+    name: Build & push bot image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          repo_lc="${GITHUB_REPOSITORY,,}"  # ghcr.io requires lowercase
+          tags="ghcr.io/${repo_lc}/bot:latest"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tags="$tags,ghcr.io/${repo_lc}/bot:${GITHUB_REF_NAME}"
+          fi
+          tags="$tags,ghcr.io/${repo_lc}/bot:${GITHUB_SHA::7}"
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  runner:
+    name: Build & push acton-runner image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          repo_lc="${GITHUB_REPOSITORY,,}"
+          tags="ghcr.io/${repo_lc}/acton-runner:latest"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tags="$tags,ghcr.io/${repo_lc}/acton-runner:${GITHUB_REF_NAME}"
+          fi
+          tags="$tags,ghcr.io/${repo_lc}/acton-runner:${GITHUB_SHA::7}"
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.acton
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -47,13 +47,13 @@ class JobQueue:
             remaining = state.timestamps[0] + 3600 - monotonic()
             minutes = max(1, int(remaining / 60))
             raise RateLimitExceeded(
-                f"⏰ Лимит: {self._config.max_checks_per_hour} "
-                f"проверок/час. Попробуйте через ~{minutes} мин."
+                f"⏰ Rate limit: {self._config.max_checks_per_hour} "
+                f"checks/hour. Try again in ~{minutes} min."
             )
 
         if state.active_jobs >= self._config.max_concurrent_per_user:
             raise RateLimitExceeded(
-                "⏳ У вас уже есть активная проверка. Дождитесь завершения."
+                "⏳ You already have an active check. Wait for it to finish."
             )
 
     async def acquire(self, user_id: int) -> int:

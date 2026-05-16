@@ -65,16 +65,17 @@ def _format_not_acton_project(result: RunResult) -> str:
         "🔬 <b>Acton CI Report</b>",
         f"📦 <code>{_escape_html(result.repo.full_name)}</code>",
         "",
-        "⚠️ <b>Это не Acton-проект</b>",
+        "⚠️ <b>Not an Acton project</b>",
         "",
-        "В корне репозитория нет <code>Acton.toml</code>, поэтому "
-        "<code>acton build</code> не может его собрать.",
+        "The repository has no <code>Acton.toml</code> at its root, so "
+        "<code>acton build</code> can't build it.",
         "",
-        "Этот бот запускает <b>Acton CLI</b> — тулкит для TON-контрактов "
-        "на Tolk, инициализируемый через <code>acton init</code>/"
+        "This bot runs the <b>Acton CLI</b> — the TON contract toolkit for "
+        "Tolk projects scaffolded with <code>acton init</code>/"
         "<code>acton new</code>.",
         "",
-        "Репозитории на чистом FunC/Tolk без Acton.toml пока не поддерживаются.",
+        "Plain FunC/Tolk repos without an <code>Acton.toml</code> aren't "
+        "supported yet.",
         "",
         f"⏱ Total: {result.total_duration_s}s",
         "━━━━━━━━━━━━━━━━━━━━━",
@@ -113,7 +114,7 @@ def format_report(result: RunResult) -> str:
 
     # Clone error
     if result.error:
-        lines.append(f"❌ <b>Error:</b>")
+        lines.append("❌ <b>Error:</b>")
         lines.append(f"<pre>{_escape_html(_truncate(result.error, 800))}</pre>")
         lines.append("")
         lines.append(f"⏱ Total: {result.total_duration_s}s")
@@ -191,59 +192,62 @@ def format_webhook_header(job) -> str:  # job: WebhookJob, kept untyped to avoid
 def format_queue_position(position: int) -> str:
     """Format a queue position message."""
     if position == 0:
-        return "⏳ <b>Запускаю проверку…</b>"
+        return "⏳ <b>Running your check…</b>"
     return (
-        f"📋 Ваша задача в очереди: позиция <b>#{position}</b>\n"
-        f"⏳ Ожидайте, я отправлю отчёт когда всё будет готово."
+        f"📋 Your job is queued at position <b>#{position}</b>.\n"
+        f"⏳ Hang tight — I'll post the report when it's ready."
     )
 
 
 def format_start_message() -> str:
     """Format the /start welcome message."""
     return (
-        "👋 <b>Привет! Я Acton CI-Bot</b>\n\n"
-        "Я запускаю автоматические проверки для TON смарт-контрактов "
-        "прямо из GitHub, GitLab или Bitbucket.\n\n"
-        "<b>Что я делаю:</b>\n"
-        "🔨 <code>acton build</code> — компиляция контракта\n"
-        "🧪 <code>acton test</code> — запуск тестов\n"
-        "🔍 <code>acton check</code> — линтинг Tolk-исходников\n"
-        "✨ <code>acton fmt --check</code> — проверка форматирования\n\n"
-        "<b>Как пользоваться:</b>\n"
-        "Отправь команду:\n"
+        "👋 <b>Hi! I'm the Acton CI-Bot</b>\n\n"
+        "I run CI checks for TON smart contracts directly from "
+        "GitHub, GitLab, or Bitbucket repositories.\n\n"
+        "<b>What I run:</b>\n"
+        "🔨 <code>acton build</code> — compile the contract\n"
+        "🧪 <code>acton test</code> — run the test suite\n"
+        "🔍 <code>acton check</code> — lint Tolk sources\n"
+        "✨ <code>acton fmt --check</code> — verify formatting\n\n"
+        "<b>How to use me:</b>\n"
+        "Send the command:\n"
         "<code>/check https://github.com/owner/repo</code>\n\n"
-        "Или просто скинь ссылку на репозиторий.\n\n"
-        "<b>Лимиты (бесплатный план):</b>\n"
-        f"• 5 проверок в час\n"
-        f"• 1 активная проверка одновременно\n"
-        f"• Максимальный размер репо: 50 MB\n"
-        f"• Только публичные репозитории\n\n"
-        "📚 /help — подробная справка"
+        "Or just paste the repo URL.\n\n"
+        "<b>Free-tier limits:</b>\n"
+        "• 5 checks per hour\n"
+        "• 1 active check at a time\n"
+        "• Max repo size: 50 MB\n"
+        "• Public repositories only\n\n"
+        "📚 /help — full reference"
     )
 
 
 def format_help_message() -> str:
     """Format the /help message."""
     return (
-        "📚 <b>Справка Acton CI-Bot</b>\n\n"
-        "<b>Команды:</b>\n"
-        "/check <code>&lt;url&gt;</code> — запустить проверку репозитория\n"
-        "/start — приветствие\n"
-        "/help — эта справка\n"
-        "/status — текущий статус очереди\n\n"
-        "<b>Поддерживаемые платформы:</b>\n"
+        "📚 <b>Acton CI-Bot help</b>\n\n"
+        "<b>Commands:</b>\n"
+        "/check <code>&lt;url&gt;</code> — run a check on a repository\n"
+        "/start — welcome message\n"
+        "/help — this help\n"
+        "/status — current queue state\n"
+        "/subscribe <code>owner/repo</code> — auto-check this repo's PRs in this chat (admin)\n"
+        "/unsubscribe <code>owner/repo</code> — stop auto-checks (admin)\n"
+        "/subscriptions — list this chat's subscriptions\n\n"
+        "<b>Supported hosts:</b>\n"
         "• GitHub — <code>https://github.com/owner/repo</code>\n"
         "• GitLab — <code>https://gitlab.com/owner/repo</code>\n"
         "• Bitbucket — <code>https://bitbucket.org/owner/repo</code>\n\n"
-        "<b>Что проверяется:</b>\n"
-        "1. 🔨 <b>Build</b> — компиляция Tolk-контрактов\n"
-        "2. 🧪 <b>Test</b> — запуск тестов (если есть)\n"
-        "3. 🔍 <b>Check</b> — линтинг и статический анализ\n"
+        "<b>What gets checked:</b>\n"
+        "1. 🔨 <b>Build</b> — compile Tolk contracts\n"
+        "2. 🧪 <b>Test</b> — run the test suite (if any)\n"
+        "3. 🔍 <b>Lint</b> — static analysis\n"
         "4. ✨ <b>Format</b> — <code>acton fmt --check</code>\n\n"
-        "Репозиторий должен быть Acton-проектом — с <code>Acton.toml</code> "
-        "в корне (создаётся через <code>acton new</code>/<code>acton init</code>).\n\n"
-        "<b>Безопасность:</b>\n"
-        "• Каждая проверка в изолированном Docker-контейнере\n"
-        "• Без доступа к сети во время выполнения\n"
-        "• Автоматическая очистка после завершения\n"
+        "The repo must be an Acton project — i.e. have <code>Acton.toml</code> at "
+        "the root (created via <code>acton new</code>/<code>acton init</code>).\n\n"
+        "<b>Sandboxing:</b>\n"
+        "• Each check runs in an isolated, ephemeral Docker container\n"
+        "• No network access during the run\n"
+        "• Workspace auto-cleaned afterward\n"
     )

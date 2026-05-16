@@ -30,6 +30,7 @@ from bot.config import AppConfig
 from bot.services.formatter import format_report, format_webhook_header
 from bot.services.queue import JobQueue
 from bot.services.runner import run_acton_pipeline
+from bot.services.stats import Stats
 from bot.services.subscriptions import SubscriptionStore
 from bot.services.validator import RepoInfo
 
@@ -111,6 +112,7 @@ async def _run_and_fan_out(
     bot: Bot,
     config: AppConfig,
     queue: JobQueue,
+    stats: Stats,
 ) -> None:
     """Run the pipeline once, post the formatted report to each chat."""
     logger.info(
@@ -130,8 +132,8 @@ async def _run_and_fan_out(
             try:
                 await bot.send_message(
                     chat_id,
-                    f"⏳ Очередь занята — PR #{job.pr_number} в "
-                    f"<code>{job.repo.full_name}</code> подождёт.",
+                    f"⏳ Queue is full — PR #{job.pr_number} in "
+                    f"<code>{job.repo.full_name}</code> will retry shortly.",
                     parse_mode="HTML",
                 )
             except Exception:
@@ -140,13 +142,19 @@ async def _run_and_fan_out(
 
     try:
         result = await run_acton_pipeline(job.repo, config.runner, ref=job.ref)
+        stats.record_check(source="webhook", success=result.success)
         header = format_webhook_header(job)
         report = header + "\n" + format_report(result)
         for chat_id in job.chat_ids:
             try:
                 await bot.send_message(chat_id, report, parse_mode="HTML")
-            except Exception:
+            except Exception as e:
                 logger.exception("post report to chat %s failed", chat_id)
+                stats.record_error(f"send_message:{chat_id}", e)
+    except Exception as e:
+        logger.exception("webhook pipeline failed: %s", job.repo.full_name)
+        stats.record_error("webhook_pipeline", e)
+        stats.record_check(source="webhook", success=False)
     finally:
         queue.release(synthetic_user_id)
 
@@ -157,6 +165,7 @@ def make_webhook_app(
     config: AppConfig,
     subscriptions: SubscriptionStore,
     queue: JobQueue,
+    stats: Stats,
     secret: str,
 ) -> web.Application:
     """Build the aiohttp app the bot serves alongside its Telegram polling."""
@@ -216,7 +225,7 @@ def make_webhook_app(
         job.chat_ids = chat_ids
 
         # Fire-and-forget — must ACK GitHub within ~10s.
-        asyncio.create_task(_run_and_fan_out(job, bot, config, queue))
+        asyncio.create_task(_run_and_fan_out(job, bot, config, queue, stats))
 
         return web.json_response(
             {"ok": True, "scheduled": True, "subscribers": len(chat_ids)},
