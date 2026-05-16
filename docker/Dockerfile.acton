@@ -1,0 +1,25 @@
+FROM ubuntu:24.04
+
+ARG ACTON_VERSION=v1.0.0
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates git && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -s /bin/bash runner
+
+USER runner
+WORKDIR /home/runner
+
+RUN set -eux; \
+    curl --fail --proto '=https' --tlsv1.2 -LsS \
+      "https://github.com/ton-blockchain/acton/releases/download/${ACTON_VERSION}/acton-installer.sh" \
+      -o /tmp/acton-installer.sh; \
+    sh /tmp/acton-installer.sh; \
+    rm /tmp/acton-installer.sh; \
+    /home/runner/.acton/bin/acton --version
+
+ENV PATH="/home/runner/.acton/bin:$PATH"
+WORKDIR /workspace
+
+ENTRYPOINT ["acton"]

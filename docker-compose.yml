@@ -1,0 +1,36 @@
+services:
+  bot:
+    build: .
+    container_name: acton-ci-bot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Mount Docker socket for spawning sibling runner containers (DooD pattern)
+      # SECURITY: bot process runs as non-root, socket access via group
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Persistent data (SQLite DB, logs)
+      - bot_data:/app/data
+      # Shared temp directory for cloned repos (host path for Docker volume mapping)
+      - /tmp/acton-workspaces:/tmp/acton-workspaces
+    environment:
+      - TMPDIR=/tmp/acton-workspaces
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.5"
+
+  # Builds the Acton runner image used by the bot for DooD spawns.
+  # No public image is published by ton-blockchain yet, so we build from
+  # the official release installer ourselves.
+  #   docker compose --profile setup build acton-runner
+  acton-runner:
+    image: acton-runner:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.acton
+    command: ["--version"]
+    profiles: ["setup"]
+
+volumes:
+  bot_data:
