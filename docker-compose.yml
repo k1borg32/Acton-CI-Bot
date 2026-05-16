@@ -1,19 +1,27 @@
 services:
   bot:
-    build: .
+    # Pass the host's docker group GID at build time so the in-container
+    # botuser can read /var/run/docker.sock. Check yours with:
+    #   getent group docker
+    # then set DOCKER_GID in .env (Debian/Ubuntu default is 999).
+    build:
+      context: .
+      args:
+        DOCKER_GID: ${DOCKER_GID:-999}
     container_name: acton-ci-bot
     restart: unless-stopped
     env_file: .env
     volumes:
-      # Mount Docker socket for spawning sibling runner containers (DooD pattern)
-      # SECURITY: bot process runs as non-root, socket access via group
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # DooD: spawn sibling runner containers via the host's daemon.
+      # Not :ro — the bot needs to send `run` commands through the socket.
+      - /var/run/docker.sock:/var/run/docker.sock
       # Persistent data (SQLite DB, logs)
       - bot_data:/app/data
-      # Shared temp directory for cloned repos (host path for Docker volume mapping)
-      - /tmp/acton-workspaces:/tmp/acton-workspaces
-    environment:
-      - TMPDIR=/tmp/acton-workspaces
+      # The bot creates per-job tempdirs under /tmp inside its container,
+      # then calls `docker run -v <tempdir>:/workspace`. For that bind to
+      # work the path must resolve on the host too — so we share host /tmp
+      # 1:1 with the bot. (Standard Docker-out-of-Docker pattern.)
+      - /tmp:/tmp
     deploy:
       resources:
         limits:
