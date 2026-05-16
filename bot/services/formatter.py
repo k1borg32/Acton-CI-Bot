@@ -175,6 +175,19 @@ def format_report(result: RunResult) -> str:
     return msg
 
 
+def format_webhook_header(job) -> str:  # job: WebhookJob, kept untyped to avoid circular import
+    """Header prepended to the standard report when the run was triggered by
+    a GitHub webhook (PR opened/synchronize/reopened)."""
+    safe_title = _escape_html(job.pr_title)[:120]
+    safe_author = _escape_html(job.pr_author)
+    safe_repo = _escape_html(job.repo.full_name)
+    return (
+        f"🔔 <b>PR #{job.pr_number}</b> · <a href=\"{job.pr_url}\">{safe_title}</a>\n"
+        f"📦 <code>{safe_repo}</code> · author: <b>{safe_author}</b> · "
+        f"<code>{job.ref[:7]}</code>"
+    )
+
+
 def format_queue_position(position: int) -> str:
     """Format a queue position message."""
     if position == 0:

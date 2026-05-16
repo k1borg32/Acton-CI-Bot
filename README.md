@@ -47,17 +47,40 @@ docker compose up -d bot
 ## Архитектура
 
 ```
-User → /check URL → Telegram Bot (aiogram 3)
+User → /check URL → Telegram Bot (aiogram 3 polling)
+                         ↓
+GitHub PR → /webhooks/github  (aiohttp, HMAC verify, fan-out by subscription)
                          ↓
                    URL Validator (whitelist + size check)
                          ↓
                    Job Queue (asyncio + rate limiting)
                          ↓
                    Docker Runner (sibling container, DooD)
-                     acton build → acton test → acton check
+                     acton build → test → check → fmt --check
                          ↓
                    Formatter → Telegram HTML report
 ```
+
+## GitHub Webhooks (Phase 2)
+
+The bot exposes `POST /webhooks/github` for automatic CI on pull requests.
+
+**Setup per repo:**
+1. In a Telegram chat (group or DM), admin runs:
+   `/subscribe owner/repo`
+2. In GitHub → repo Settings → Webhooks → **Add webhook**:
+   - Payload URL: `https://your-bot-domain/webhooks/github`
+   - Content type: `application/json`
+   - Secret: same value as `GITHUB_WEBHOOK_SECRET` in your `.env`
+   - Events: **Just the pull request** (or "Pull requests" only)
+3. Open/sync/reopen a PR → the report appears in the subscribed chat.
+
+Other commands:
+- `/subscriptions` — list this chat's active subscriptions
+- `/unsubscribe owner/repo` — remove
+
+Only events with action `opened`, `synchronize`, or `reopened` trigger a run.
+Other events return 202 ignored.
 
 ## Безопасность
 

@@ -122,12 +122,13 @@ async def _clone_repo(
     repo: RepoInfo,
     dest: str,
     timeout: int,
+    ref: str | None = None,
 ) -> tuple[int, str, str]:
-    """Clone a repository with security hardening."""
+    """Clone a repository with security hardening. If `ref` is given (a
+    branch name, tag, or SHA), the clone is restricted to that ref."""
     cmd = [
         "git", "clone",
         "--depth=1",
-        "--single-branch",
         "--no-recurse-submodules",
         "--config", "core.symlinks=false",
         "--config", "core.hooksPath=/dev/null",
@@ -137,10 +138,44 @@ async def _clone_repo(
         # any other byte-sensitive tool) report false failures.
         "--config", "core.autocrlf=false",
         "--config", "core.eol=lf",
-        repo.url,
-        dest,
     ]
-    return await _run_subprocess(cmd, timeout=timeout)
+    if ref is not None:
+        # --branch accepts either a branch/tag name; for a raw SHA we fall
+        # back to clone + fetch + checkout below.
+        cmd.extend(["--branch", ref, "--single-branch"])
+    else:
+        cmd.append("--single-branch")
+    cmd.extend([repo.url, dest])
+
+    code, stdout, stderr = await _run_subprocess(cmd, timeout=timeout)
+    if code != 0 and ref is not None and _looks_like_sha(ref):
+        # `git clone --branch <SHA>` fails — retry with default branch then
+        # fetch the SHA explicitly.
+        code, stdout, stderr = await _run_subprocess(
+            ["git", "clone", "--depth=1", "--no-recurse-submodules",
+             "--config", "core.symlinks=false",
+             "--config", "core.hooksPath=/dev/null",
+             "--config", "protocol.file.allow=never",
+             "--config", "core.autocrlf=false",
+             "--config", "core.eol=lf",
+             repo.url, dest],
+            timeout=timeout,
+        )
+        if code == 0:
+            code, stdout, stderr = await _run_subprocess(
+                ["git", "-C", dest, "fetch", "--depth=1", "origin", ref],
+                timeout=timeout,
+            )
+            if code == 0:
+                code, stdout, stderr = await _run_subprocess(
+                    ["git", "-C", dest, "checkout", "--detach", ref],
+                    timeout=timeout,
+                )
+    return code, stdout, stderr
+
+
+def _looks_like_sha(ref: str) -> bool:
+    return len(ref) >= 7 and len(ref) <= 40 and all(c in "0123456789abcdef" for c in ref.lower())
 
 
 # Pipeline step → Acton CLI args. fmt runs with --check so it only reports,
@@ -236,10 +271,11 @@ async def run_acton_steps(
 async def run_acton_pipeline(
     repo: RepoInfo,
     config: RunnerConfig,
+    ref: str | None = None,
 ) -> RunResult:
     """
     Full Acton CI pipeline:
-      0. git clone (hardened)
+      0. git clone (hardened) — optionally pinned to `ref` (branch/tag/SHA)
       1. acton build
       2. acton test  (skipped if build fails)
       3. acton check (skipped if build fails)
@@ -253,9 +289,9 @@ async def run_acton_pipeline(
     with _scoped_tempdir(prefix="acton_") as tmpdir:
         project_dir = str(Path(tmpdir) / "project")
 
-        logger.info("Cloning %s into %s", repo.url, project_dir)
+        logger.info("Cloning %s ref=%s into %s", repo.url, ref or "<default>", project_dir)
         code, stdout, stderr = await _clone_repo(
-            repo, project_dir, config.clone_timeout
+            repo, project_dir, config.clone_timeout, ref=ref
         )
 
         if code != 0:

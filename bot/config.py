@@ -59,10 +59,20 @@ class RateLimitConfig:
 
 
 @dataclass(frozen=True)
+class WebhookConfig:
+    secret: str = field(
+        default_factory=lambda: environ.get("GITHUB_WEBHOOK_SECRET", "")
+    )
+    host: str = field(default_factory=lambda: environ.get("WEBHOOK_HOST", "0.0.0.0"))
+    port: int = field(default_factory=lambda: int(environ.get("WEBHOOK_PORT", "3000")))
+
+
+@dataclass(frozen=True)
 class AppConfig:
     bot: BotConfig = field(default_factory=BotConfig)
     runner: RunnerConfig = field(default_factory=RunnerConfig)
     rate_limit: RateLimitConfig = field(default_factory=RateLimitConfig)
+    webhook: WebhookConfig = field(default_factory=WebhookConfig)
     db_path: str = field(
         default_factory=lambda: environ.get("DB_PATH", "data/acton_bot.db")
     )

@@ -41,11 +41,14 @@ from bot.services.runner import (
     run_acton_pipeline,
     run_acton_steps,
 )
+from bot.services.subscriptions import SubscriptionStore
 from bot.services.validator import (
     RepoInfo,
     ValidationError,
     parse_repo_url,
 )
+from bot.services.webhook import _parse_pr_event, _verify_signature
+from bot.handlers.subscriptions import _parse_repo_arg
 
 
 # ───────────────── helpers ─────────────────
@@ -292,6 +295,125 @@ def t_formatter_clone_error() -> None:
     assert_contains(out, "repository not found", "clone error surfaced")
 
 
+# ───────────────── subscriptions tests ─────────────────
+
+
+def t_subs_crud() -> None:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+        store = SubscriptionStore(os.path.join(d, "subs.db"))
+        assert_eq(store.count(), 0, "fresh store is empty")
+        assert_eq(store.add(100, "owner/repo", 1), True, "first add returns True")
+        assert_eq(store.add(100, "owner/repo", 1), False, "duplicate add returns False")
+        subs = store.list_for_chat(100)
+        assert_eq(len(subs), 1, "one subscription listed")
+        assert_eq(subs[0].repo_full_name, "owner/repo", "round-trip repo name")
+        assert_eq(store.remove(100, "owner/repo"), True, "remove returns True")
+        assert_eq(store.remove(100, "owner/repo"), False, "second remove returns False")
+
+
+def t_subs_case_insensitive() -> None:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+        store = SubscriptionStore(os.path.join(d, "subs.db"))
+        store.add(7, "Owner/Repo", 1)
+        chats = store.list_chats_for_repo("owner/repo")
+        assert_eq(chats, [7], "lookup is case-insensitive")
+        chats = store.list_chats_for_repo("OWNER/REPO")
+        assert_eq(chats, [7], "lookup is case-insensitive (upper)")
+
+
+def t_subs_multi_chat() -> None:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+        store = SubscriptionStore(os.path.join(d, "subs.db"))
+        store.add(1, "k/r", 100)
+        store.add(2, "k/r", 100)
+        store.add(3, "other/r", 100)
+        chats = sorted(store.list_chats_for_repo("k/r"))
+        assert_eq(chats, [1, 2], "two chats fan-out for k/r")
+        assert_eq(store.list_chats_for_repo("other/r"), [3], "single chat for other/r")
+        assert_eq(store.list_chats_for_repo("missing/x"), [], "empty list for unknown repo")
+
+
+def t_parse_repo_arg() -> None:
+    assert_eq(_parse_repo_arg("/subscribe owner/repo"), "owner/repo", "bare form")
+    assert_eq(
+        _parse_repo_arg("/subscribe https://github.com/owner/repo"),
+        "owner/repo",
+        "url form",
+    )
+    assert_eq(
+        _parse_repo_arg("/subscribe https://github.com/owner/repo.git"),
+        "owner/repo",
+        "url with .git",
+    )
+    if _parse_repo_arg("/subscribe") is not None:
+        raise AssertionError("missing arg should return None")
+    if _parse_repo_arg("/subscribe https://gitlab.com/x/y") is not None:
+        raise AssertionError("gitlab url should be rejected (github-only webhooks)")
+    if _parse_repo_arg("/subscribe owner/repo;rm -rf /") is not None:
+        raise AssertionError("must reject injection-y args")
+
+
+# ───────────────── webhook tests ─────────────────
+
+
+def t_webhook_signature() -> None:
+    import hashlib, hmac as _hmac
+    secret = "topsecret"
+    body = b'{"hello":"world"}'
+    good = "sha256=" + _hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    assert_eq(_verify_signature(secret, body, good), True, "good signature passes")
+    bad = "sha256=" + ("0" * 64)
+    assert_eq(_verify_signature(secret, body, bad), False, "bad signature rejected")
+    assert_eq(_verify_signature(secret, body, None), False, "missing header rejected")
+    assert_eq(_verify_signature(secret, body, "wrong-prefix"), False, "wrong prefix rejected")
+
+
+def _sample_pr_payload(action: str = "opened") -> dict:
+    return {
+        "action": action,
+        "number": 42,
+        "pull_request": {
+            "number": 42,
+            "title": "feat: add thing",
+            "html_url": "https://github.com/k1borg32/acton-counter-demo/pull/42",
+            "user": {"login": "k1borg32"},
+            "head": {
+                "ref": "feature-branch",
+                "sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+                "repo": {
+                    "name": "acton-counter-demo",
+                    "clone_url": "https://github.com/k1borg32/acton-counter-demo.git",
+                    "owner": {"login": "k1borg32"},
+                },
+            },
+        },
+        "repository": {"full_name": "k1borg32/acton-counter-demo"},
+    }
+
+
+def t_webhook_pr_event_parse() -> None:
+    job = _parse_pr_event(_sample_pr_payload("opened"))
+    if job is None:
+        raise AssertionError("opened PR should produce a job")
+    assert_eq(job.repo.full_name, "k1borg32/acton-counter-demo", "repo full_name")
+    assert_eq(job.ref, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "head sha")
+    assert_eq(job.pr_number, 42, "PR number")
+    assert_eq(job.pr_author, "k1borg32", "PR author")
+    assert_eq(job.repo.url, "https://github.com/k1borg32/acton-counter-demo", "clone url normalized")
+
+
+def t_webhook_pr_action_filter() -> None:
+    if _parse_pr_event(_sample_pr_payload("closed")) is not None:
+        raise AssertionError("closed action must be filtered out")
+    if _parse_pr_event(_sample_pr_payload("labeled")) is not None:
+        raise AssertionError("labeled action must be filtered out")
+    if _parse_pr_event({"action": "opened"}) is not None:
+        raise AssertionError("missing pr block must be filtered out")
+    for action in ("opened", "synchronize", "reopened"):
+        if _parse_pr_event(_sample_pr_payload(action)) is None:
+            raise AssertionError(f"{action} should produce a job")
+
+
 # ───────────────── runner integration tests ─────────────────
 
 
@@ -411,6 +533,17 @@ async def main() -> int:
     results.append(report_case("timeout rendering",      t_formatter_timeout))
     results.append(report_case("html escaping (xss)",    t_formatter_html_escaping))
     results.append(report_case("clone error rendering",  t_formatter_clone_error))
+
+    section("subscriptions store")
+    results.append(report_case("CRUD round-trip", t_subs_crud))
+    results.append(report_case("case-insensitive repo names", t_subs_case_insensitive))
+    results.append(report_case("multi-chat fan-out", t_subs_multi_chat))
+    results.append(report_case("parse repo arg", t_parse_repo_arg))
+
+    section("webhook")
+    results.append(report_case("hmac signature verify", t_webhook_signature))
+    results.append(report_case("pr event parsing", t_webhook_pr_event_parse))
+    results.append(report_case("pr event filter (action)", t_webhook_pr_action_filter))
 
     section("runner integration")
     results.append(await report_case_async("image smoke",            t_runner_image_smoke))
