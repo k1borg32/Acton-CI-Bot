@@ -2,7 +2,7 @@
 FROM python:3.12-slim AS bot
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git && \
+    apt-get install -y --no-install-recommends git curl && \
     rm -rf /var/lib/apt/lists/*
 
 # Docker CLI binary so the bot can spawn sibling runner containers (DooD).
