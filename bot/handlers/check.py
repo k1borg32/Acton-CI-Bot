@@ -17,6 +17,7 @@ from aiogram.types import Message
 
 from bot.config import AppConfig
 from bot.services.formatter import format_report, format_queue_position
+from bot.services.menus import report_actions
 from bot.services.queue import JobQueue, RateLimitExceeded
 from bot.services.runner import run_acton_pipeline
 from bot.services.stats import Stats
@@ -81,11 +82,17 @@ def _extract_check_arg(message: Message) -> str | None:
     return None
 
 
-def setup_check_handler(config: AppConfig, queue: JobQueue, stats: Stats) -> Router:
-    """Register the /check, /retry and bare-URL handlers."""
+def setup_check_handler(
+    config: AppConfig,
+    queue: JobQueue,
+    stats: Stats,
+    last_check: dict[int, "_ParsedArg"],
+) -> Router:
+    """Register the /check, /retry and bare-URL handlers.
 
-    # chat_id → last (url, ref) — in-memory, lost on restart (fine for MVP)
-    last_check: dict[int, _ParsedArg] = {}
+    `last_check` is the chat_id → last-/check-args dict, shared with the
+    menu handler so button-driven /retry works against menu-initiated checks.
+    """
 
     async def _run_and_report(
         message: Message,
@@ -108,7 +115,12 @@ def setup_check_handler(config: AppConfig, queue: JobQueue, stats: Stats) -> Rou
             result = await run_acton_pipeline(repo_info, config.runner, ref=ref)
             stats.record_check(source="manual", success=result.success)
             report = format_report(result)
-            await message.reply(report, parse_mode="HTML")
+            kb = report_actions(
+                retry_url=repo_info.url,
+                retry_ref=ref,
+                repo_url=repo_info.url,
+            )
+            await message.reply(report, parse_mode="HTML", reply_markup=kb)
             try:
                 await status_msg.delete()
             except Exception:

@@ -33,6 +33,7 @@ from bot.services.formatter import format_gas_diff, format_report, format_webhoo
 from bot.services.gas_diff import diff_snapshots, filter_significant, rank
 from bot.services.github import GitHubClient
 from bot.services.md_report import format_pr_comment
+from bot.services.menus import report_actions
 from bot.services.queue import JobQueue
 from bot.services.runner import run_acton_pipeline
 from bot.services.stats import Stats
@@ -203,9 +204,15 @@ async def _run_and_fan_out(
         gas_block = ("\n" + format_gas_diff(deltas)) if deltas else ""
         report = header + "\n" + format_report(result) + gas_block
 
+        kb = report_actions(
+            retry_url=job.repo.url, retry_ref=job.ref,
+            pr_url=job.pr_url, repo_url=job.repo.url,
+        )
         for chat_id in job.chat_ids:
             try:
-                await bot.send_message(chat_id, report, parse_mode="HTML")
+                await bot.send_message(
+                    chat_id, report, parse_mode="HTML", reply_markup=kb,
+                )
             except Exception as e:
                 logger.exception("post report to chat %s failed", chat_id)
                 stats.record_error(f"send_message:{chat_id}", e)
