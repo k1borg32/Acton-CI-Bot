@@ -7,6 +7,7 @@ rendering just the duration.
 
 from __future__ import annotations
 
+import json
 import re
 
 # acton build:
@@ -76,7 +77,58 @@ def summarize_test(stdout: str, stderr: str, ok: bool) -> str | None:
     return ", ".join(parts) + suffix
 
 
+def _parse_check_json(stdout: str) -> dict | None:
+    """Try to extract the JSON envelope from acton check --output-format json.
+    Returns None if stdout isn't (or doesn't contain) valid JSON.
+    """
+    text = stdout.strip()
+    if not text:
+        return None
+    # Acton check writes a clean JSON object to stdout in JSON mode; try the
+    # whole thing first, then fall back to the last `{...}` block in case
+    # there's a prefix/log line.
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            return json.loads(text[start : end + 1])
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
 def summarize_check(stdout: str, stderr: str, ok: bool) -> str | None:
+    """Summarize `acton check --output-format json` output.
+
+    Falls back to the plain-text counters if JSON isn't present (e.g. an
+    older Acton version or unexpected output).
+    """
+    # 1) Preferred path: parse JSON diagnostics
+    parsed = _parse_check_json(stdout)
+    if parsed is not None:
+        diagnostics = parsed.get("diagnostics") or []
+        if isinstance(diagnostics, list):
+            n_err = sum(1 for d in diagnostics if isinstance(d, dict)
+                        and str(d.get("severity", "")).lower() in ("error", "fatal"))
+            n_warn = sum(1 for d in diagnostics if isinstance(d, dict)
+                         and str(d.get("severity", "")).lower() in ("warning", "warn"))
+            n_other = max(0, len(diagnostics) - n_err - n_warn)
+            if not diagnostics:
+                return "no issues"
+            parts = []
+            if n_err:
+                parts.append(f"{n_err} error{'s' if n_err != 1 else ''}")
+            if n_warn:
+                parts.append(f"{n_warn} warning{'s' if n_warn != 1 else ''}")
+            if n_other:
+                parts.append(f"{n_other} other")
+            return ", ".join(parts) if parts else f"{len(diagnostics)} findings"
+
+    # 2) Fallback: regex counters on plain text
     text = _combine(stdout, stderr)
     n_checked = len(_CHECK_CHECKING.findall(text))
     n_warnings = len(_CHECK_WARNINGS.findall(text))
@@ -85,15 +137,55 @@ def summarize_check(stdout: str, stderr: str, ok: bool) -> str | None:
         if n_warnings:
             return f"{n_checked} sources, {n_warnings} warning{'s' if n_warnings != 1 else ''}"
         return f"{n_checked} sources, no issues"
-    if not ok:
-        if n_errors or n_warnings:
-            parts = []
-            if n_errors:
-                parts.append(f"{n_errors} error{'s' if n_errors != 1 else ''}")
-            if n_warnings:
-                parts.append(f"{n_warnings} warning{'s' if n_warnings != 1 else ''}")
-            return ", ".join(parts)
+    if not ok and (n_errors or n_warnings):
+        parts = []
+        if n_errors:
+            parts.append(f"{n_errors} error{'s' if n_errors != 1 else ''}")
+        if n_warnings:
+            parts.append(f"{n_warnings} warning{'s' if n_warnings != 1 else ''}")
+        return ", ".join(parts)
     return None
+
+
+def extract_check_findings(stdout: str, max_findings: int = 5) -> list[dict]:
+    """Return up to N diagnostic dicts for richer rendering (formatter
+    surfaces these under a failed Lint step). Each dict has best-effort keys:
+    `code`, `severity`, `file`, `line`, `message`.
+    """
+    parsed = _parse_check_json(stdout)
+    if parsed is None:
+        return []
+    diagnostics = parsed.get("diagnostics") or []
+    if not isinstance(diagnostics, list):
+        return []
+    out: list[dict] = []
+    for d in diagnostics[:max_findings]:
+        if not isinstance(d, dict):
+            continue
+        # Acton's exact field names may vary slightly across versions; pick
+        # the first match from each candidate group.
+        code = d.get("code") or d.get("rule") or d.get("id") or ""
+        severity = d.get("severity") or d.get("level") or ""
+        file_ = d.get("file") or d.get("path") or ""
+        # Line might be top-level or nested in `location`/`range`/`span`
+        line: int | str = d.get("line") or ""
+        if not line:
+            loc = d.get("location") or d.get("range") or d.get("span") or {}
+            if isinstance(loc, dict):
+                line = loc.get("line") or loc.get("start_line") or ""
+                if not line:
+                    start = loc.get("start") or {}
+                    if isinstance(start, dict):
+                        line = start.get("line") or ""
+        message = d.get("message") or d.get("text") or d.get("description") or ""
+        out.append({
+            "code": str(code),
+            "severity": str(severity),
+            "file": str(file_),
+            "line": str(line),
+            "message": str(message)[:200],
+        })
+    return out
 
 
 def summarize_fmt(stdout: str, stderr: str, ok: bool) -> str | None:

@@ -5,6 +5,7 @@ Converts RunResult into nicely formatted Telegram messages
 using HTML parse mode (more reliable than MarkdownV2 for escaping).
 """
 
+from bot.services.parsers import extract_check_findings
 from bot.services.runner import RunResult, StepResult
 
 # Max Telegram message length
@@ -143,6 +144,22 @@ def format_report(result: RunResult) -> str:
 
         # Show error details for failed steps
         if not step.ok:
+            # For `check`, prefer rendering per-finding JSON diagnostics over
+            # dumping the raw stderr. Falls back to stderr if no JSON found.
+            if step.step == "check":
+                findings = extract_check_findings(step.stdout)
+                if findings:
+                    for f in findings:
+                        loc = f["file"] + (f":{f['line']}" if f["line"] else "")
+                        sev = f["severity"].lower()
+                        sev_icon = "❌" if sev in ("error", "fatal") else "⚠️"
+                        head = f"  {sev_icon} <code>{_escape_html(f['code'] or sev or 'lint')}</code>"
+                        if loc:
+                            head += f" <code>{_escape_html(loc)}</code>"
+                        lines.append(head)
+                        if f["message"]:
+                            lines.append(f"      {_escape_html(f['message'])}")
+                    continue  # skip the generic <pre> dump below
             error_text = step.stderr or step.stdout
             if error_text:
                 truncated = _truncate(error_text, 600)
@@ -177,6 +194,37 @@ def format_report(result: RunResult) -> str:
         msg = msg[: MAX_MSG_LEN - 20] + "\n\n<i>…truncated</i>"
 
     return msg
+
+
+def format_gas_diff(deltas: list, max_rows: int = 8) -> str:
+    """Render a gas-diff section. `deltas` is a list of GasDelta from
+    bot.services.gas_diff. Returns "" if there's nothing significant.
+
+    Example output:
+      ⛽ <b>Gas changes vs base</b>
+        🔻 IncreaseCounter: 1412 → 1185 (-227, -16.1%)
+        🔺 DecreaseCounter: 1294 → 1380 (+86, +6.6%)
+        🆕 NewMessage: 920 (new)
+    """
+    if not deltas:
+        return ""
+    lines = ["⛽ <b>Gas changes vs base</b>"]
+    for d in deltas[:max_rows]:
+        name = _escape_html(d.name)
+        if d.base_avg is None:
+            lines.append(f"  🆕 <code>{name}</code>: {d.head_avg} <i>(new)</i>")
+        elif d.head_avg is None:
+            lines.append(f"  🗑 <code>{name}</code>: was {d.base_avg} <i>(removed)</i>")
+        else:
+            sign = "+" if d.delta_abs >= 0 else ""
+            arrow = "🔺" if d.delta_abs > 0 else "🔻" if d.delta_abs < 0 else "▪️"
+            lines.append(
+                f"  {arrow} <code>{name}</code>: {d.base_avg} → {d.head_avg} "
+                f"({sign}{d.delta_abs}, {sign}{d.delta_pct:.1f}%)"
+            )
+    if len(deltas) > max_rows:
+        lines.append(f"  …+{len(deltas) - max_rows} more")
+    return "\n".join(lines)
 
 
 def format_webhook_header(job) -> str:  # job: WebhookJob, kept untyped to avoid circular import

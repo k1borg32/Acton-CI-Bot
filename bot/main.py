@@ -27,6 +27,8 @@ from bot.handlers.check import setup_check_handler
 from bot.handlers.common import router as common_router
 from bot.handlers.status import setup_status_handler
 from bot.handlers.subscriptions import setup_subscriptions_handler
+from bot.handlers.tools import setup_tools_handler
+from bot.services.github import GitHubClient
 from bot.services.queue import JobQueue
 from bot.services.stats import Stats
 from bot.services.subscriptions import SubscriptionStore
@@ -75,6 +77,9 @@ async def main() -> None:
     queue = JobQueue(config.rate_limit)
     subscriptions = SubscriptionStore(config.db_path)
     stats = Stats()
+    gh = GitHubClient(config.webhook.github_bot_token)
+    if not gh.enabled:
+        logger.info("GITHUB_BOT_TOKEN not set — PR comment mirror disabled")
 
     dp = Dispatcher()
     dp.include_router(common_router)
@@ -85,11 +90,15 @@ async def main() -> None:
         stats=stats, queue=queue, subscriptions=subscriptions,
         admin_ids=config.bot.admin_ids,
     ))
+    dp.include_router(setup_tools_handler(config))
 
     await bot.set_my_commands([
         BotCommand(command="start", description="Welcome message"),
         BotCommand(command="check", description="Run CI on a repository"),
         BotCommand(command="retry", description="Re-run the last check in this chat"),
+        BotCommand(command="disasm", description="Disassemble TVM bytecode or a deployed address"),
+        BotCommand(command="wrapper", description="Generate a Tolk/TS wrapper for a contract"),
+        BotCommand(command="verify", description="Compare a deployed contract with its source"),
         BotCommand(command="status", description="Queue status"),
         BotCommand(command="subscribe", description="Auto-check a repo's PRs in this chat"),
         BotCommand(command="unsubscribe", description="Stop auto-checks in this chat"),
@@ -103,6 +112,7 @@ async def main() -> None:
         subscriptions=subscriptions,
         queue=queue,
         stats=stats,
+        gh=gh,
         secret=config.webhook.secret,
     )
     if not config.webhook.secret:

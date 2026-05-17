@@ -41,12 +41,20 @@ from bot.services.runner import (
     run_acton_pipeline,
     run_acton_steps,
 )
+from bot.services.gas_diff import (
+    GasDelta,
+    diff_snapshots,
+    filter_significant,
+    rank,
+)
 from bot.services.parsers import (
+    extract_check_findings,
     summarize_build,
     summarize_check,
     summarize_fmt,
     summarize_test,
 )
+from bot.services.md_report import format_pr_comment
 from bot.services.subscriptions import SubscriptionStore
 from bot.services.validator import (
     RepoInfo,
@@ -540,6 +548,123 @@ def t_formatter_with_summary() -> None:
     assert_contains(out, "all files properly formatted", "fmt summary rendered")
 
 
+# ───────────────── lint json parsing ─────────────────
+
+
+def t_check_json_clean() -> None:
+    stdout = '{"success": true, "diagnostics": []}'
+    s = summarize_check(stdout, "", ok=True)
+    assert_contains(s or "", "no issues", "clean json: no issues")
+    findings = extract_check_findings(stdout)
+    assert_eq(findings, [], "no findings when diagnostics empty")
+
+
+def t_check_json_findings() -> None:
+    stdout = '''{
+      "success": false,
+      "diagnostics": [
+        {"code": "S001", "severity": "warning", "file": "a.tolk", "line": 12, "message": "unused var"},
+        {"code": "S010", "severity": "error",   "file": "b.tolk", "line": 5,  "message": "type mismatch"}
+      ]
+    }'''
+    s = summarize_check(stdout, "", ok=False)
+    assert_contains(s or "", "1 error", "json summary error count")
+    assert_contains(s or "", "1 warning", "json summary warning count")
+    findings = extract_check_findings(stdout)
+    assert_eq(len(findings), 2, "two findings extracted")
+    assert_eq(findings[0]["code"], "S001", "code preserved")
+    assert_contains(findings[1]["message"], "type mismatch", "message preserved")
+
+
+# ───────────────── gas diff tests ─────────────────
+
+
+def _write_snapshot(path: str, opcodes: dict[str, int]) -> None:
+    import json
+    data = {"opcodes": {k: {"avg_gas": v} for k, v in opcodes.items()}}
+    with open(path, "w") as f:
+        json.dump(data, f)
+
+
+def t_gas_diff_basic() -> None:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+        base = os.path.join(d, "base.json")
+        head = os.path.join(d, "head.json")
+        _write_snapshot(base, {"Increase": 1000, "Decrease": 500, "Removed": 200})
+        _write_snapshot(head, {"Increase": 1100, "Decrease": 500, "NewMsg": 300})
+        deltas = diff_snapshots(base, head)
+        by_name = {d.name: d for d in deltas}
+        assert_eq(by_name["Increase"].delta_abs, 100, "increase delta")
+        assert_eq(by_name["Decrease"].delta_abs, 0, "decrease unchanged")
+        assert_eq(by_name["Removed"].head_avg, None, "removed has no head")
+        assert_eq(by_name["NewMsg"].base_avg, None, "new has no base")
+
+
+def t_gas_diff_filter() -> None:
+    deltas = [
+        GasDelta(name="Tiny", base_avg=1000, head_avg=1003),     # +0.3% — noise
+        GasDelta(name="Big",  base_avg=1000, head_avg=1200),     # +20% — keep
+        GasDelta(name="New",  base_avg=None, head_avg=500),       # new — keep
+    ]
+    kept = filter_significant(deltas, min_abs_change=10, min_pct_change=1.0)
+    names = sorted(d.name for d in kept)
+    assert_eq(names, ["Big", "New"], "noise floor filters tiny")
+
+
+def t_gas_diff_rank() -> None:
+    deltas = [
+        GasDelta(name="Small", base_avg=1000, head_avg=1050),  # +50
+        GasDelta(name="Big",   base_avg=1000, head_avg=1500),  # +500
+        GasDelta(name="New",   base_avg=None, head_avg=300),
+    ]
+    ranked = rank(deltas)
+    assert_eq(ranked[0].name, "New", "new/removed first")
+    assert_eq(ranked[1].name, "Big", "biggest change second")
+    assert_eq(ranked[2].name, "Small", "smallest last")
+
+
+def t_gas_diff_missing() -> None:
+    deltas = diff_snapshots("/no/such/base", "/no/such/head")
+    assert_eq(deltas, [], "missing files → empty list (no crash)")
+
+
+# ───────────────── github md report tests ─────────────────
+
+
+def t_md_report() -> None:
+    r = RunResult(repo=_fake_repo(), total_duration_s=3.0)
+    r.steps = [
+        StepResult("build", 0, "", "", 0.4, summary="compiled 1 contract: Counter"),
+        StepResult("test",  0, "", "", 0.5, summary="8 passed in 1 file"),
+        StepResult("check", 0, "", "", 0.5, summary="no issues"),
+        StepResult("fmt",   0, "", "", 0.2, summary="all files properly formatted"),
+    ]
+    md = format_pr_comment(r, head_sha="abcdef1234567890", pr_url="https://x/pr/1")
+    assert_contains(md, "Acton CI report", "header")
+    assert_contains(md, "abcdef1", "head sha shown")
+    assert_contains(md, "| Step |", "table header")
+    assert_contains(md, "Counter", "build summary shown")
+    assert_contains(md, "**All checks passed**", "happy summary")
+    if "<script>" in md:
+        raise AssertionError("html not safe in markdown? (shouldn't happen here)")
+
+
+def t_md_report_with_gas() -> None:
+    r = RunResult(repo=_fake_repo(), total_duration_s=3.0)
+    r.steps = [StepResult("build", 0, "", "", 0.4, summary="compiled 1 contract: X")]
+    deltas = [
+        GasDelta(name="Increase", base_avg=1000, head_avg=1100),
+        GasDelta(name="Removed", base_avg=200, head_avg=None),
+    ]
+    md = format_pr_comment(
+        r, head_sha="a" * 40, pr_url="https://x/pr/2", gas_deltas=deltas,
+    )
+    assert_contains(md, "Gas changes vs base", "gas section header")
+    assert_contains(md, "Increase", "opcode name")
+    assert_contains(md, "+100", "gas delta value")
+    assert_contains(md, "Removed", "removed opcode")
+
+
 # ───────────────── runner integration tests ─────────────────
 
 
@@ -688,6 +813,20 @@ async def main() -> int:
 
     section("formatter (summary rendering)")
     results.append(report_case("step summary appended", t_formatter_with_summary))
+
+    section("lint json parsing")
+    results.append(report_case("check json: clean run", t_check_json_clean))
+    results.append(report_case("check json: with findings", t_check_json_findings))
+
+    section("gas diff")
+    results.append(report_case("diff snapshots from json files", t_gas_diff_basic))
+    results.append(report_case("filter noise floor", t_gas_diff_filter))
+    results.append(report_case("rank new/removed first", t_gas_diff_rank))
+    results.append(report_case("missing files → empty diff", t_gas_diff_missing))
+
+    section("github md report")
+    results.append(report_case("pr comment markdown render", t_md_report))
+    results.append(report_case("pr comment with gas diff", t_md_report_with_gas))
 
     section("runner integration")
     results.append(await report_case_async("image smoke",            t_runner_image_smoke))

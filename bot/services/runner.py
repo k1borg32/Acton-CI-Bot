@@ -181,11 +181,13 @@ def _looks_like_sha(ref: str) -> bool:
 
 
 # Pipeline step → Acton CLI args. fmt runs with --check so it only reports,
-# never rewrites files.
+# never rewrites files. check uses JSON output for richer per-finding parsing.
+# The test step args are extended by _run_acton_step when a gas-snapshot path
+# is provided.
 _STEP_ARGS: dict[str, list[str]] = {
     "build": ["build"],
     "test": ["test"],
-    "check": ["check"],
+    "check": ["check", "--output-format", "json"],
     "fmt": ["fmt", "--check"],
 }
 
@@ -194,13 +196,23 @@ async def _run_acton_step(
     step: str,
     project_dir: str,
     config: RunnerConfig,
+    gas_snapshot_path: str | None = None,
 ) -> StepResult:
-    """Run a single Acton step inside a Docker container."""
+    """Run a single Acton step inside a Docker container.
+
+    If `gas_snapshot_path` is given AND step == "test", appends
+    --snapshot <path> so the test runner emits a gas snapshot JSON.
+    Path is interpreted inside the /workspace mount.
+    """
     t0 = monotonic()
 
     # Docker Desktop on Windows accepts forward-slash drive paths
     # (e.g. C:/Users/... → mounted via the VM). On Linux it's a no-op.
     docker_project_dir = project_dir.replace("\\", "/")
+
+    extra_args: list[str] = []
+    if step == "test" and gas_snapshot_path:
+        extra_args = ["--snapshot", gas_snapshot_path]
 
     # Mount is RW because `acton build` writes artifacts into the project
     # directory. Containment comes from --network=none, --rm, --pids-limit,
@@ -219,6 +231,7 @@ async def _run_acton_step(
         "-w", "/workspace",
         config.docker_image,
         *_STEP_ARGS[step],
+        *extra_args,
     ]
 
     return_code, stdout, stderr = await _run_subprocess(
@@ -240,16 +253,56 @@ async def _run_acton_step(
 _PIPELINE_STEPS = ("build", "test", "check", "fmt")
 
 
+async def run_acton_adhoc(
+    args: list[str],
+    config: RunnerConfig,
+    *,
+    project_dir: str | None = None,
+    timeout: int | None = None,
+    allow_network: bool = False,
+) -> tuple[int, str, str]:
+    """Run an ad-hoc `acton <args>` inside a fresh container.
+
+    Used by /disasm, /wrapper, /verify which don't fit the build→test→check
+    pipeline shape. `project_dir`, if given, is bind-mounted at /workspace.
+    `allow_network` relaxes --network=none (needed for `disasm --address`
+    or any subcommand that fetches from the blockchain / dependencies).
+    """
+    timeout = timeout or config.build_timeout
+    cmd: list[str] = [
+        "docker", "run", "--rm",
+        "--memory", config.container_memory,
+        "--cpus", config.container_cpus,
+        "--pids-limit", config.container_pids_limit,
+        "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges",
+        "--tmpfs", "/tmp:size=128m,exec",
+    ]
+    if not allow_network:
+        cmd.extend(["--network", "none"])
+    if project_dir:
+        docker_pd = project_dir.replace("\\", "/")
+        cmd.extend(["-v", f"{docker_pd}:/workspace", "-w", "/workspace"])
+    cmd.append(config.docker_image)
+    cmd.extend(args)
+    return await _run_subprocess(cmd, timeout=timeout)
+
+
 async def run_acton_steps(
     project_dir: str,
     config: RunnerConfig,
     result: RunResult,
+    gas_snapshot_path: str | None = None,
 ) -> None:
     """Run build → test → check → fmt against an already-prepared project dir.
 
     Mutates `result` in-place. `test`/`check`/`fmt` are skipped if `build`
     fails. Exposed separately so tests can drive the pipeline without a
     git clone.
+
+    If `gas_snapshot_path` is given, it's passed to the `test` step so Acton
+    writes a gas snapshot JSON there. Path is relative to /workspace (e.g.
+    "/workspace/gas.json") because that's the in-container view.
     """
     build_failed = False
     for step_name in _PIPELINE_STEPS:
@@ -267,7 +320,10 @@ async def run_acton_steps(
             continue
 
         logger.info("Running acton %s in %s", step_name, project_dir)
-        step_result = await _run_acton_step(step_name, project_dir, config)
+        step_result = await _run_acton_step(
+            step_name, project_dir, config,
+            gas_snapshot_path=gas_snapshot_path,
+        )
         result.steps.append(step_result)
 
         if step_name == "build" and not step_result.ok:
@@ -279,6 +335,7 @@ async def run_acton_pipeline(
     repo: RepoInfo,
     config: RunnerConfig,
     ref: str | None = None,
+    gas_snapshot_host_path: str | None = None,
 ) -> RunResult:
     """
     Full Acton CI pipeline:
@@ -289,6 +346,11 @@ async def run_acton_pipeline(
       4. acton fmt --check (skipped if build fails)
 
     Each step runs in a fresh ephemeral Docker container.
+
+    If `gas_snapshot_host_path` is given, the test step writes its gas
+    snapshot there (a host path that will also be visible inside the
+    runner container via the /tmp:/tmp bind mount). After the pipeline
+    finishes the caller can read that JSON to do PR base↔head diffing.
     """
     result = RunResult(repo=repo)
     t0 = monotonic()
@@ -307,7 +369,29 @@ async def run_acton_pipeline(
             logger.error("Clone failed for %s: %s", repo.full_name, stderr)
             return result
 
-        await run_acton_steps(project_dir, config, result)
+        # The gas snapshot path lives under /workspace so it's reachable
+        # from inside the runner container. Write it into the cloned project
+        # dir (which IS /workspace inside the container).
+        in_container_snapshot = None
+        if gas_snapshot_host_path is not None:
+            snapshot_name = Path(gas_snapshot_host_path).name
+            in_container_snapshot = f"/workspace/{snapshot_name}"
+            # also copy into the project dir on disk via the same name
+            # so the host can find it at $project_dir/$snapshot_name
+        await run_acton_steps(
+            project_dir, config, result,
+            gas_snapshot_path=in_container_snapshot,
+        )
+
+        # If a snapshot was requested, move it from the project dir to the
+        # caller-specified host path (project dir is about to be deleted).
+        if gas_snapshot_host_path is not None and in_container_snapshot is not None:
+            src = Path(project_dir) / Path(in_container_snapshot).name
+            if src.exists():
+                try:
+                    shutil.copyfile(src, gas_snapshot_host_path)
+                except OSError as e:
+                    logger.warning("Failed to persist gas snapshot: %s", e)
 
     result.total_duration_s = round(monotonic() - t0, 1)
     return result

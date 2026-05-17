@@ -65,6 +65,11 @@ class WebhookConfig:
     )
     host: str = field(default_factory=lambda: environ.get("WEBHOOK_HOST", "0.0.0.0"))
     port: int = field(default_factory=lambda: int(environ.get("WEBHOOK_PORT", "3000")))
+    # Optional PAT (or fine-grained token) with `pull-requests: write` so the
+    # bot mirrors each webhook report as a GitHub PR comment. Empty = skip.
+    github_bot_token: str = field(
+        default_factory=lambda: environ.get("GITHUB_BOT_TOKEN", "")
+    )
 
 
 @dataclass(frozen=True)

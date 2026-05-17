@@ -20,6 +20,8 @@ import hashlib
 import hmac
 import json
 import logging
+import os
+import tempfile
 from dataclasses import dataclass
 from typing import Any
 
@@ -27,7 +29,10 @@ from aiogram import Bot
 from aiohttp import web
 
 from bot.config import AppConfig
-from bot.services.formatter import format_report, format_webhook_header
+from bot.services.formatter import format_gas_diff, format_report, format_webhook_header
+from bot.services.gas_diff import diff_snapshots, filter_significant, rank
+from bot.services.github import GitHubClient
+from bot.services.md_report import format_pr_comment
 from bot.services.queue import JobQueue
 from bot.services.runner import run_acton_pipeline
 from bot.services.stats import Stats
@@ -51,6 +56,8 @@ class WebhookJob:
     pr_author: str
     pr_url: str
     chat_ids: list[int]
+    base_repo: RepoInfo | None = None  # PR base repo (often same owner)
+    base_ref: str | None = None        # PR base SHA, for gas-diff baseline
 
 
 def _verify_signature(secret: str, body: bytes, header: str | None) -> bool:
@@ -87,7 +94,24 @@ def _parse_pr_event(payload: dict[str, Any]) -> WebhookJob | None:
     pr_number = pr.get("number") or 0
     pr_title = pr.get("title") or ""
 
-    base_full = base_repo.get("full_name") or f"{owner_login}/{repo_name}"
+    # Base ref info — used for gas-diff baseline. The base repo is usually
+    # the parent (where the PR targets), distinct from head_repo for forks.
+    base = pr.get("base") or {}
+    base_sha = base.get("sha")
+    base_repo_info = base.get("repo") or {}
+    base_clone_url = base_repo_info.get("clone_url") or base_repo_info.get("html_url")
+    base_owner = (base_repo_info.get("owner") or {}).get("login")
+    base_name = base_repo_info.get("name")
+
+    job_base_repo: RepoInfo | None = None
+    if base_sha and base_clone_url and base_owner and base_name:
+        if base_clone_url.startswith("https://github.com/"):
+            job_base_repo = RepoInfo(
+                platform="github",
+                owner=base_owner,
+                repo=base_name,
+                url=base_clone_url.rstrip(".git"),
+            )
 
     return WebhookJob(
         repo=RepoInfo(
@@ -102,9 +126,9 @@ def _parse_pr_event(payload: dict[str, Any]) -> WebhookJob | None:
         pr_author=pr_user,
         pr_url=pr_url,
         chat_ids=[],  # populated by handler after subscription lookup
+        base_repo=job_base_repo,
+        base_ref=base_sha if job_base_repo else None,
     )
-
-    _ = base_full  # currently unused but kept for future routing precision
 
 
 async def _run_and_fan_out(
@@ -113,6 +137,7 @@ async def _run_and_fan_out(
     config: AppConfig,
     queue: JobQueue,
     stats: Stats,
+    gh: GitHubClient,
 ) -> None:
     """Run the pipeline once, post the formatted report to each chat."""
     logger.info(
@@ -140,23 +165,77 @@ async def _run_and_fan_out(
                 logger.exception("notify chat %s failed", chat_id)
         return
 
+    # If we have a base ref, run base first (snapshot + discard report)
+    # then head, then diff. Reuse the same tempdir parent so both snapshots
+    # are co-located.
+    snap_dir = tempfile.mkdtemp(prefix="gas_diff_")
+    head_snap = os.path.join(snap_dir, "head.json")
+    base_snap = os.path.join(snap_dir, "base.json")
+
     try:
-        result = await run_acton_pipeline(job.repo, config.runner, ref=job.ref)
+        # Step 1: base run (for gas baseline). Best-effort — if it fails,
+        # we still ship the head report, just without gas diff.
+        if job.base_repo is not None and job.base_ref:
+            try:
+                logger.info(
+                    "gas baseline: %s ref=%s", job.base_repo.full_name, job.base_ref[:7]
+                )
+                await run_acton_pipeline(
+                    job.base_repo, config.runner, ref=job.base_ref,
+                    gas_snapshot_host_path=base_snap,
+                )
+            except Exception as e:
+                logger.warning("base run failed (gas diff skipped): %s", e)
+
+        # Step 2: head run (the report we actually post)
+        result = await run_acton_pipeline(
+            job.repo, config.runner, ref=job.ref,
+            gas_snapshot_host_path=head_snap,
+        )
         stats.record_check(source="webhook", success=result.success)
+
+        # Step 3: build the report (Telegram HTML + GitHub markdown share data)
+        deltas = []
+        if os.path.exists(base_snap) and os.path.exists(head_snap):
+            deltas = rank(filter_significant(diff_snapshots(base_snap, head_snap)))
+
         header = format_webhook_header(job)
-        report = header + "\n" + format_report(result)
+        gas_block = ("\n" + format_gas_diff(deltas)) if deltas else ""
+        report = header + "\n" + format_report(result) + gas_block
+
         for chat_id in job.chat_ids:
             try:
                 await bot.send_message(chat_id, report, parse_mode="HTML")
             except Exception as e:
                 logger.exception("post report to chat %s failed", chat_id)
                 stats.record_error(f"send_message:{chat_id}", e)
+
+        # Step 4: best-effort PR comment mirror (only if GITHUB_BOT_TOKEN is set)
+        if gh.enabled:
+            try:
+                comment = format_pr_comment(
+                    result,
+                    head_sha=job.ref,
+                    pr_url=job.pr_url,
+                    gas_deltas=deltas or None,
+                )
+                await gh.post_pr_comment(
+                    job.repo.owner, job.repo.repo, job.pr_number, comment
+                )
+            except Exception as e:
+                logger.warning("PR comment mirror failed: %s", e)
     except Exception as e:
         logger.exception("webhook pipeline failed: %s", job.repo.full_name)
         stats.record_error("webhook_pipeline", e)
         stats.record_check(source="webhook", success=False)
     finally:
         queue.release(synthetic_user_id)
+        # best-effort cleanup of the gas-diff tempdir
+        try:
+            import shutil as _sh
+            _sh.rmtree(snap_dir, ignore_errors=True)
+        except Exception:
+            pass
 
 
 def make_webhook_app(
@@ -166,6 +245,7 @@ def make_webhook_app(
     subscriptions: SubscriptionStore,
     queue: JobQueue,
     stats: Stats,
+    gh: GitHubClient,
     secret: str,
 ) -> web.Application:
     """Build the aiohttp app the bot serves alongside its Telegram polling."""
@@ -225,7 +305,7 @@ def make_webhook_app(
         job.chat_ids = chat_ids
 
         # Fire-and-forget — must ACK GitHub within ~10s.
-        asyncio.create_task(_run_and_fan_out(job, bot, config, queue, stats))
+        asyncio.create_task(_run_and_fan_out(job, bot, config, queue, stats, gh))
 
         return web.json_response(
             {"ok": True, "scheduled": True, "subscribers": len(chat_ids)},
