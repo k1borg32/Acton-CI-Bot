@@ -136,7 +136,10 @@ def format_report(result: RunResult) -> str:
             )
             continue
 
-        lines.append(f"{emoji} <b>{label}</b> — {step.duration_s}s")
+        line = f"{emoji} <b>{label}</b> — {step.duration_s}s"
+        if step.summary:
+            line += f" · <i>{_escape_html(step.summary)}</i>"
+        lines.append(line)
 
         # Show error details for failed steps
         if not step.ok:
@@ -229,6 +232,9 @@ def format_help_message() -> str:
         "📚 <b>Acton CI-Bot help</b>\n\n"
         "<b>Commands:</b>\n"
         "/check <code>&lt;url&gt;</code> — run a check on a repository\n"
+        "/check <code>owner/repo @branch</code> — check a specific branch\n"
+        "/check <code>owner/repo #abc1234</code> — check a specific commit\n"
+        "/retry — re-run the last /check in this chat\n"
         "/start — welcome message\n"
         "/help — this help\n"
         "/status — current queue state\n"

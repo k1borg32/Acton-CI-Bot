@@ -89,6 +89,7 @@ async def main() -> None:
     await bot.set_my_commands([
         BotCommand(command="start", description="Welcome message"),
         BotCommand(command="check", description="Run CI on a repository"),
+        BotCommand(command="retry", description="Re-run the last check in this chat"),
         BotCommand(command="status", description="Queue status"),
         BotCommand(command="subscribe", description="Auto-check a repo's PRs in this chat"),
         BotCommand(command="unsubscribe", description="Stop auto-checks in this chat"),

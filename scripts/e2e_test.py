@@ -41,6 +41,12 @@ from bot.services.runner import (
     run_acton_pipeline,
     run_acton_steps,
 )
+from bot.services.parsers import (
+    summarize_build,
+    summarize_check,
+    summarize_fmt,
+    summarize_test,
+)
 from bot.services.subscriptions import SubscriptionStore
 from bot.services.validator import (
     RepoInfo,
@@ -48,6 +54,7 @@ from bot.services.validator import (
     parse_repo_url,
 )
 from bot.services.webhook import _parse_pr_event, _verify_signature
+from bot.handlers.check import _parse_arg
 from bot.handlers.subscriptions import _parse_repo_arg
 
 
@@ -414,6 +421,125 @@ def t_webhook_pr_action_filter() -> None:
             raise AssertionError(f"{action} should produce a job")
 
 
+# ───────────────── output parser tests ─────────────────
+
+
+_BUILD_OK_STDOUT = """   Compiling contracts
+   Compiling Counter
+    Finished in 32.683998ms
+    Finished in 73.456499ms
+"""
+
+_TEST_OK_STDOUT = """  ✓ reset counter 2ms
+  ✓ decrease counter 2ms
+  ✓ decrease counter fails on underflow 1ms
+  ✓ non-owner cannot change counter 2ms
+
+ ✓ 8 passed in 1 file
+"""
+
+_TEST_FAIL_STDOUT = """  ✓ reset counter 2ms
+  ✗ decrease counter — expected 5, got 4
+
+ ✗ 1 failed, 7 passed in 1 file
+"""
+
+_CHECK_OK_STDOUT = """    Checking Counter
+    Checking scripts/deploy.tolk
+    Checking tests/counter.test.tolk
+"""
+
+_FMT_OK_STDOUT = "All files are properly formatted\n"
+
+
+def t_parser_build() -> None:
+    s = summarize_build(_BUILD_OK_STDOUT, "", ok=True)
+    assert_contains(s or "", "Counter", "build mentions Counter")
+    assert_contains(s or "", "compiled 1 contract", "build counts contracts")
+
+
+def t_parser_test_pass() -> None:
+    s = summarize_test(_TEST_OK_STDOUT, "", ok=True)
+    assert_contains(s or "", "8 passed", "test reports 8 passed")
+    assert_contains(s or "", "1 file", "test mentions file count")
+
+
+def t_parser_test_fail() -> None:
+    s = summarize_test(_TEST_FAIL_STDOUT, "", ok=False)
+    assert_contains(s or "", "1 failed", "test reports 1 failed")
+    assert_contains(s or "", "7 passed", "test reports 7 passed")
+
+
+def t_parser_check_ok() -> None:
+    s = summarize_check(_CHECK_OK_STDOUT, "", ok=True)
+    assert_contains(s or "", "3 sources", "check counts 3 sources")
+    assert_contains(s or "", "no issues", "check says no issues")
+
+
+def t_parser_fmt_ok() -> None:
+    s = summarize_fmt(_FMT_OK_STDOUT, "", ok=True)
+    assert_contains(s or "", "properly formatted", "fmt summary present")
+
+
+def t_parser_unknown() -> None:
+    # Empty / unrecognized output → None (formatter falls back to duration only)
+    if summarize_build("", "", ok=True) is not None:
+        raise AssertionError("empty build output should yield None")
+    if summarize_test("garbage", "garbage", ok=True) is not None:
+        raise AssertionError("non-test output should yield None")
+
+
+# ───────────────── /check arg parser tests ─────────────────
+
+
+def t_check_arg_url() -> None:
+    p = _parse_arg("https://github.com/owner/repo")
+    assert_eq(p.url, "https://github.com/owner/repo", "url passthrough")
+    assert_eq(p.ref, None, "no ref")
+
+
+def t_check_arg_shorthand() -> None:
+    p = _parse_arg("owner/repo")
+    assert_eq(p.url, "https://github.com/owner/repo", "shorthand expanded")
+    assert_eq(p.ref, None, "no ref")
+
+
+def t_check_arg_branch() -> None:
+    p = _parse_arg("owner/repo @feature-x")
+    assert_eq(p.url, "https://github.com/owner/repo", "shorthand expanded")
+    assert_eq(p.ref, "feature-x", "branch extracted")
+    p2 = _parse_arg("https://github.com/owner/repo @main")
+    assert_eq(p2.ref, "main", "url + @branch")
+
+
+def t_check_arg_sha() -> None:
+    p = _parse_arg("https://github.com/owner/repo #abc1234")
+    assert_eq(p.ref, "abc1234", "sha extracted via # separator")
+
+
+def t_check_arg_inject() -> None:
+    # Shell metacharacters in shorthand must be rejected (no opportunity to
+    # leak into a shell — but we belt-and-braces refuse them)
+    for bad in ("owner/repo;rm -rf /", "owner/repo|whoami", "owner/repo`id`"):
+        if _parse_arg(bad) is not None:
+            raise AssertionError(f"must reject injection-y arg: {bad!r}")
+
+
+def t_formatter_with_summary() -> None:
+    r = RunResult(repo=_fake_repo(), total_duration_s=2.0)
+    r.steps = [
+        StepResult("build", 0, "", "", 0.4, summary="compiled 1 contract: Counter"),
+        StepResult("test",  0, "", "", 0.5, summary="8 passed in 1 file"),
+        StepResult("check", 0, "", "", 0.5, summary="3 sources, no issues"),
+        StepResult("fmt",   0, "", "", 0.2, summary="all files properly formatted"),
+    ]
+    out = format_report(r)
+    assert_contains(out, "compiled 1 contract: Counter", "build summary rendered")
+    assert_contains(out, "8 passed in 1 file", "test summary rendered")
+    assert_contains(out, "3 sources, no issues", "check summary rendered")
+    assert_contains(out, "all files properly formatted", "fmt summary rendered")
+
+
 # ───────────────── runner integration tests ─────────────────
 
 
@@ -544,6 +670,24 @@ async def main() -> int:
     results.append(report_case("hmac signature verify", t_webhook_signature))
     results.append(report_case("pr event parsing", t_webhook_pr_event_parse))
     results.append(report_case("pr event filter (action)", t_webhook_pr_action_filter))
+
+    section("output parsers")
+    results.append(report_case("build summary", t_parser_build))
+    results.append(report_case("test summary (pass)", t_parser_test_pass))
+    results.append(report_case("test summary (fail)", t_parser_test_fail))
+    results.append(report_case("check summary (ok)", t_parser_check_ok))
+    results.append(report_case("fmt summary (ok)", t_parser_fmt_ok))
+    results.append(report_case("parsers degrade gracefully", t_parser_unknown))
+
+    section("/check arg parser")
+    results.append(report_case("plain URL", t_check_arg_url))
+    results.append(report_case("github shorthand", t_check_arg_shorthand))
+    results.append(report_case("URL with @branch", t_check_arg_branch))
+    results.append(report_case("URL with #sha", t_check_arg_sha))
+    results.append(report_case("reject injection", t_check_arg_inject))
+
+    section("formatter (summary rendering)")
+    results.append(report_case("step summary appended", t_formatter_with_summary))
 
     section("runner integration")
     results.append(await report_case_async("image smoke",            t_runner_image_smoke))

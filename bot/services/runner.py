@@ -26,6 +26,7 @@ from pathlib import Path
 from time import monotonic
 
 from bot.config import RunnerConfig
+from bot.services.parsers import summarize
 from bot.services.validator import RepoInfo
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ class StepResult:
     stderr: str
     duration_s: float
     skipped: bool = False
+    summary: str | None = None  # short human-readable extract, e.g. "8 passed in 1 file"
 
     @property
     def ok(self) -> bool:
@@ -224,12 +226,14 @@ async def _run_acton_step(
     )
     duration = monotonic() - t0
 
+    ok = return_code == 0
     return StepResult(
         step=step,
         return_code=return_code,
         stdout=stdout,
         stderr=stderr,
         duration_s=round(duration, 1),
+        summary=summarize(step, stdout, stderr, ok),
     )
 
 
