@@ -9,7 +9,7 @@ from aiogram.types import Message
 
 from bot.config import DonationsConfig
 from bot.services.formatter import format_start_message, format_help_message
-from bot.services.menus import main_menu, main_reply_keyboard
+from bot.services.menus import main_reply_keyboard
 
 
 def setup_common_handler(donations: DonationsConfig) -> Router:
@@ -19,16 +19,12 @@ def setup_common_handler(donations: DonationsConfig) -> Router:
     @router.message(CommandStart())
     async def handle_start(message: Message, state: FSMContext) -> None:
         await state.clear()
-        # Two messages: persistent reply keyboard first (set once), then the
-        # welcome text with an inline keyboard for in-message shortcuts.
-        await message.answer(
-            "👋 Tap any button below — they stay there the whole time.",
-            reply_markup=main_reply_keyboard(),
-        )
+        # Single message: welcome text + persistent reply keyboard.
+        # No duplicate inline keyboard above — same actions, twice = clutter.
         await message.answer(
             format_start_message(),
             parse_mode="HTML",
-            reply_markup=main_menu(show_donate=show_donate),
+            reply_markup=main_reply_keyboard(show_donate=show_donate),
             disable_web_page_preview=True,
         )
 
@@ -37,7 +33,7 @@ def setup_common_handler(donations: DonationsConfig) -> Router:
         await message.answer(
             format_help_message(),
             parse_mode="HTML",
-            reply_markup=main_menu(show_donate=show_donate),
+            reply_markup=main_reply_keyboard(show_donate=show_donate),
             disable_web_page_preview=True,
         )
 

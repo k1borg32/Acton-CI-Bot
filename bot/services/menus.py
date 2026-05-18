@@ -26,17 +26,24 @@ BTN_TOOLS = "🛠 Tools"
 BTN_SUBS = "📋 Subscriptions"
 BTN_STATUS = "📊 Status"
 BTN_HELP = "❓ Help"
+BTN_DONATE = "💚 Donate"
 
 
-def main_reply_keyboard() -> ReplyKeyboardMarkup:
+def main_reply_keyboard(*, show_donate: bool = False) -> ReplyKeyboardMarkup:
     """Persistent button bar at the bottom of the chat. Tapping a button
-    sends its label as a message; the menu handler matches on the text."""
+    sends its label as a message; the menu handler matches on the text.
+
+    The Donate row only appears when the operator has configured a
+    donation address (otherwise it'd point at nothing)."""
+    keyboard = [
+        [KeyboardButton(text=BTN_CHECK), KeyboardButton(text=BTN_RETRY)],
+        [KeyboardButton(text=BTN_TOOLS), KeyboardButton(text=BTN_SUBS)],
+        [KeyboardButton(text=BTN_STATUS), KeyboardButton(text=BTN_HELP)],
+    ]
+    if show_donate:
+        keyboard.append([KeyboardButton(text=BTN_DONATE)])
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=BTN_CHECK), KeyboardButton(text=BTN_RETRY)],
-            [KeyboardButton(text=BTN_TOOLS), KeyboardButton(text=BTN_SUBS)],
-            [KeyboardButton(text=BTN_STATUS), KeyboardButton(text=BTN_HELP)],
-        ],
+        keyboard=keyboard,
         resize_keyboard=True,
         is_persistent=True,
         input_field_placeholder="Tap a button or paste a repo URL…",

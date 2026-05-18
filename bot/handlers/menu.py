@@ -25,6 +25,7 @@ from bot.config import AppConfig
 from bot.services.formatter import format_help_message, format_start_message
 from bot.services.menus import (
     BTN_CHECK,
+    BTN_DONATE,
     BTN_HELP,
     BTN_RETRY,
     BTN_STATUS,
@@ -87,6 +88,9 @@ def setup_menu_handler(
     def menu_kb():
         return main_menu(show_donate=show_donate)
 
+    def reply_kb():
+        return main_reply_keyboard(show_donate=show_donate)
+
     # We need access to the same `_run_and_report` helper as /check, but
     # that's defined inside setup_check_handler. To avoid duplication we
     # inline a slimmer version here.
@@ -141,13 +145,10 @@ def setup_menu_handler(
     async def cmd_menu(message: Message, state: FSMContext) -> None:
         await state.clear()
         await message.answer(
-            "Tap any button below — they stay there the whole time.",
-            reply_markup=main_reply_keyboard(),
-        )
-        await message.answer(
             format_start_message(),
             parse_mode="HTML",
-            reply_markup=menu_kb(),
+            reply_markup=reply_kb(),
+            disable_web_page_preview=True,
         )
 
     # ─────────────────── reply-keyboard button handlers ───────────────────
@@ -224,13 +225,27 @@ def setup_menu_handler(
         from bot.services.formatter import format_help_message
         await message.answer(format_help_message(), parse_mode="HTML")
 
+    @router.message(F.text == BTN_DONATE)
+    async def btn_donate(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        from bot.handlers.donate import _format_donate
+        text, kb = _format_donate(config.donations)
+        await message.answer(
+            text, parse_mode="HTML",
+            disable_web_page_preview=True, reply_markup=kb,
+        )
+
     # ─────────────────── main-menu callbacks ───────────────────
 
     @router.callback_query(F.data == f"{CB_MENU}:root")
     async def cb_menu_root(call: CallbackQuery, state: FSMContext) -> None:
         await state.clear()
-        await call.message.edit_text(
-            format_start_message(), parse_mode="HTML", reply_markup=menu_kb(),
+        # Send a fresh start message with the reply keyboard refreshed —
+        # the inline main menu is no longer used (the bottom keyboard is
+        # always present), so there's nothing to "edit back" to.
+        await call.message.answer(
+            format_start_message(), parse_mode="HTML",
+            reply_markup=reply_kb(), disable_web_page_preview=True,
         )
         await call.answer()
 
