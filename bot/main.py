@@ -25,7 +25,8 @@ from aiohttp import web
 from bot.config import AppConfig
 from bot.handlers.admin import setup_admin_handler
 from bot.handlers.check import setup_check_handler
-from bot.handlers.common import router as common_router
+from bot.handlers.common import setup_common_handler
+from bot.handlers.donate import setup_donate_handler
 from bot.handlers.menu import setup_menu_handler
 from bot.handlers.status import setup_status_handler
 from bot.handlers.subscriptions import setup_subscriptions_handler
@@ -34,6 +35,7 @@ from bot.services.github import GitHubClient
 from bot.services.queue import JobQueue
 from bot.services.stats import Stats
 from bot.services.subscriptions import SubscriptionStore
+from bot.services.usage import UsageStore
 from bot.services.webhook import make_webhook_app
 
 
@@ -76,7 +78,8 @@ async def main() -> None:
         token=config.bot.token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    queue = JobQueue(config.rate_limit)
+    usage = UsageStore(config.db_path)
+    queue = JobQueue(config.rate_limit, usage=usage)
     subscriptions = SubscriptionStore(config.db_path)
     stats = Stats()
     gh = GitHubClient(config.webhook.github_bot_token)
@@ -89,7 +92,8 @@ async def main() -> None:
     # the inline 🔁 Retry button.
     last_check_per_chat: dict = {}
 
-    dp.include_router(common_router)
+    dp.include_router(setup_common_handler(config.donations))
+    dp.include_router(setup_donate_handler(config.donations))
     dp.include_router(setup_check_handler(config, queue, stats, last_check_per_chat))
     dp.include_router(setup_status_handler(queue))
     dp.include_router(setup_subscriptions_handler(subscriptions, config.bot.admin_ids))
@@ -113,6 +117,7 @@ async def main() -> None:
         BotCommand(command="wrapper", description="Generate a Tolk/TS wrapper for a contract"),
         BotCommand(command="verify", description="Compare a deployed contract with its source"),
         BotCommand(command="status", description="Queue status"),
+        BotCommand(command="donate", description="Support the bot — keep it running"),
         BotCommand(command="subscribe", description="Auto-check a repo's PRs in this chat"),
         BotCommand(command="unsubscribe", description="Stop auto-checks in this chat"),
         BotCommand(command="subscriptions", description="List this chat's subscriptions"),

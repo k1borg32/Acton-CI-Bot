@@ -56,6 +56,7 @@ from bot.services.parsers import (
 )
 from bot.services.md_report import format_pr_comment
 from bot.services.subscriptions import SubscriptionStore
+from bot.services.usage import UsageStore
 from bot.services.validator import (
     RepoInfo,
     ValidationError,
@@ -155,53 +156,141 @@ def t_validator_rejects_bad_urls() -> None:
 # ───────────────── queue tests ─────────────────
 
 
+def _fresh_queue(d: str, cfg: RateLimitConfig | None = None) -> JobQueue:
+    cfg = cfg or RateLimitConfig()
+    usage = UsageStore(os.path.join(d, "usage.db"))
+    return JobQueue(cfg, usage=usage)
+
+
 async def t_queue_per_user_hourly_limit() -> None:
-    cfg = RateLimitConfig()
-    q = JobQueue(cfg)
-    # Saturate the per-hour quota
-    for _ in range(cfg.max_checks_per_hour):
-        await q.acquire(user_id=42)
-        q.release(user_id=42)
-    # Next call should be rate-limited
-    try:
-        await q.acquire(user_id=42)
-    except RateLimitExceeded as e:
-        assert_contains(e.user_message, "Rate limit", "hourly limit msg")
-        return
-    raise AssertionError("expected hourly limit to fire")
+    import tempfile as _tf
+    with _tf.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+        cfg = RateLimitConfig()
+        q = _fresh_queue(d, cfg)
+        for _ in range(cfg.max_checks_per_hour):
+            await q.acquire(user_id=42)
+            q.release(user_id=42)
+        try:
+            await q.acquire(user_id=42)
+        except RateLimitExceeded as e:
+            assert_contains(e.user_message, "Hourly limit", "hourly limit msg")
+            return
+        raise AssertionError("expected hourly limit to fire")
+
+
+async def t_queue_per_user_daily_limit() -> None:
+    """Saturate the per-day quota by setting hourly = daily and tripping it."""
+    import tempfile as _tf
+    with _tf.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+        # Daily=3, hourly raised so daily trips first
+        cfg = RateLimitConfig(
+            max_checks_per_hour=10,
+            max_checks_per_day=3,
+            max_concurrent_per_user=1,
+            max_concurrent_global=3,
+            max_checks_global_per_day=1000,
+        )
+        q = _fresh_queue(d, cfg)
+        for _ in range(3):
+            await q.acquire(user_id=99)
+            q.release(user_id=99)
+        try:
+            await q.acquire(user_id=99)
+        except RateLimitExceeded as e:
+            assert_contains(e.user_message, "Daily limit", "daily limit msg")
+            return
+        raise AssertionError("expected daily limit to fire")
+
+
+async def t_queue_global_daily_cap() -> None:
+    import tempfile as _tf
+    with _tf.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+        cfg = RateLimitConfig(
+            max_checks_per_hour=10,
+            max_checks_per_day=10,
+            max_concurrent_per_user=1,
+            max_concurrent_global=3,
+            max_checks_global_per_day=2,  # tiny global cap
+        )
+        q = _fresh_queue(d, cfg)
+        await q.acquire(user_id=1); q.release(1)
+        await q.acquire(user_id=2); q.release(2)
+        # 3rd from any user → global cap fires
+        try:
+            await q.acquire(user_id=3)
+        except RateLimitExceeded as e:
+            assert_contains(e.user_message, "capacity", "global daily cap msg")
+            return
+        raise AssertionError("expected global daily cap to fire")
 
 
 async def t_queue_per_user_concurrent_limit() -> None:
-    q = JobQueue(RateLimitConfig())
-    await q.acquire(user_id=7)
-    try:
-        await q.acquire(user_id=7)  # already has one active
-    except RateLimitExceeded as e:
-        assert_contains(e.user_message, "active check", "concurrent limit msg")
-        q.release(user_id=7)
-        return
-    raise AssertionError("expected concurrent limit to fire")
+    import tempfile as _tf
+    with _tf.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+        q = _fresh_queue(d)
+        await q.acquire(user_id=7)
+        try:
+            await q.acquire(user_id=7)
+        except RateLimitExceeded as e:
+            assert_contains(e.user_message, "active check", "concurrent limit msg")
+            q.release(user_id=7)
+            return
+        raise AssertionError("expected concurrent limit to fire")
 
 
 async def t_queue_global_serialization() -> None:
-    cfg = RateLimitConfig()
-    q = JobQueue(cfg)
-    # Acquire max_concurrent_global slots from distinct users
-    for uid in range(cfg.max_concurrent_global):
-        pos = await q.acquire(user_id=1000 + uid)
-        assert_eq(pos, 0, f"first wave should not queue (uid {uid})")
-    # Next acquire from a new user should *block* on the semaphore
-    waiter = asyncio.create_task(q.acquire(user_id=9999))
-    await asyncio.sleep(0.05)
-    if waiter.done():
-        raise AssertionError("global limit not enforced — extra job acquired immediately")
-    # Release one slot, waiter should proceed
-    q.release(user_id=1000)
-    await asyncio.wait_for(waiter, timeout=2.0)
-    # Cleanup
-    for uid in range(1, cfg.max_concurrent_global):
-        q.release(user_id=1000 + uid)
-    q.release(user_id=9999)
+    import tempfile as _tf
+    with _tf.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+        cfg = RateLimitConfig()
+        q = _fresh_queue(d, cfg)
+        for uid in range(cfg.max_concurrent_global):
+            pos = await q.acquire(user_id=1000 + uid)
+            assert_eq(pos, 0, f"first wave should not queue (uid {uid})")
+        waiter = asyncio.create_task(q.acquire(user_id=9999))
+        await asyncio.sleep(0.05)
+        if waiter.done():
+            raise AssertionError("global limit not enforced — extra job acquired immediately")
+        q.release(user_id=1000)
+        await asyncio.wait_for(waiter, timeout=2.0)
+        for uid in range(1, cfg.max_concurrent_global):
+            q.release(user_id=1000 + uid)
+        q.release(user_id=9999)
+
+
+# ───────────────── usage store tests ─────────────────
+
+
+def t_usage_record_count() -> None:
+    import tempfile as _tf, time as _t
+    with _tf.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+        store = UsageStore(os.path.join(d, "usage.db"))
+        for _ in range(3):
+            store.record(user_id=1)
+        store.record(user_id=2)
+        now = int(_t.time())
+        assert_eq(store.count_user_since(1, now - 3600), 3, "user 1 has 3 events")
+        assert_eq(store.count_user_since(2, now - 3600), 1, "user 2 has 1 event")
+        assert_eq(store.count_global_since(now - 3600), 4, "global = 4")
+        assert_eq(store.count_user_since(1, now + 10), 0, "future cutoff = 0")
+
+
+def t_usage_oldest_and_cleanup() -> None:
+    import tempfile as _tf, time as _t, sqlite3 as _s
+    with _tf.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+        path = os.path.join(d, "usage.db")
+        store = UsageStore(path)
+        # Insert events with custom timestamps via direct SQL (avoid sleep)
+        now = int(_t.time())
+        conn = _s.connect(path)
+        for ts in (now - 7200, now - 1800, now - 100):
+            conn.execute("INSERT INTO usage_events VALUES (?, ?, 'manual')", (1, ts))
+        conn.commit()
+        conn.close()
+        oldest = store.oldest_user_ts_since(1, now - 3600)
+        assert_eq(oldest, now - 1800, "oldest in 1h window")
+        removed = store.cleanup_older_than(now - 3600)
+        assert_eq(removed, 1, "one row pruned")
+        assert_eq(store.count_user_since(1, 0), 2, "two remain")
 
 
 # ───────────────── formatter tests ─────────────────
@@ -772,8 +861,14 @@ async def main() -> int:
 
     section("queue")
     results.append(await report_case_async("per-user hourly limit", t_queue_per_user_hourly_limit))
+    results.append(await report_case_async("per-user daily limit",  t_queue_per_user_daily_limit))
+    results.append(await report_case_async("global daily cap",      t_queue_global_daily_cap))
     results.append(await report_case_async("per-user concurrent",   t_queue_per_user_concurrent_limit))
     results.append(await report_case_async("global serialization",  t_queue_global_serialization))
+
+    section("usage store")
+    results.append(report_case("record + count round-trip", t_usage_record_count))
+    results.append(report_case("oldest_ts + cleanup",       t_usage_oldest_and_cleanup))
 
     section("formatter")
     results.append(report_case("start/help",             t_formatter_start_help))

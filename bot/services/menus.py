@@ -56,9 +56,10 @@ CB_REPORT = "r"         # r:retry:<url>[@ref]  | r:url:<encoded>
 CB_CANCEL = "x"         # x — clear FSM state
 
 
-def main_menu() -> InlineKeyboardMarkup:
-    """Root menu shown on /start and /menu."""
-    return InlineKeyboardMarkup(inline_keyboard=[
+def main_menu(*, show_donate: bool = False) -> InlineKeyboardMarkup:
+    """Root menu shown on /start and /menu. `show_donate` is True iff the
+    operator has configured a donation address."""
+    rows = [
         [
             InlineKeyboardButton(text="🔬 Check a repo", callback_data=f"{CB_CHECK}:start"),
             InlineKeyboardButton(text="🔁 Retry last", callback_data=f"{CB_REPORT}:retry:_"),
@@ -71,7 +72,12 @@ def main_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📊 Status", callback_data=f"{CB_MENU}:status"),
             InlineKeyboardButton(text="❓ Help", callback_data=f"{CB_MENU}:help"),
         ],
-    ])
+    ]
+    if show_donate:
+        rows.append([
+            InlineKeyboardButton(text="💚 Donate", callback_data=f"{CB_MENU}:donate"),
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def tools_menu() -> InlineKeyboardMarkup:

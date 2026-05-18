@@ -50,11 +50,19 @@ class RateLimitConfig:
     max_checks_per_hour: int = field(
         default_factory=lambda: int(environ.get("MAX_CHECKS_PER_HOUR", "5"))
     )
+    max_checks_per_day: int = field(
+        default_factory=lambda: int(environ.get("MAX_CHECKS_PER_DAY", "30"))
+    )
     max_concurrent_per_user: int = field(
         default_factory=lambda: int(environ.get("MAX_CONCURRENT_PER_USER", "1"))
     )
     max_concurrent_global: int = field(
         default_factory=lambda: int(environ.get("MAX_CONCURRENT_GLOBAL", "3"))
+    )
+    # Global 24h cap — keeps the VPS from melting if the bot suddenly goes
+    # viral. Sized for a small VPS at ~3-5s wall per check.
+    max_checks_global_per_day: int = field(
+        default_factory=lambda: int(environ.get("MAX_CHECKS_GLOBAL_PER_DAY", "1000"))
     )
 
 
@@ -73,11 +81,27 @@ class WebhookConfig:
 
 
 @dataclass(frozen=True)
+class DonationsConfig:
+    """If a TON address is set, the bot shows a /donate command + button.
+    Empty = the donation surface is hidden entirely."""
+    ton_address: str = field(
+        default_factory=lambda: environ.get("DONATE_TON_ADDRESS", "")
+    )
+    note: str = field(
+        default_factory=lambda: environ.get(
+            "DONATE_NOTE",
+            "Acton CI-Bot is free and public. Donations cover the VPS and let me keep adding features.",
+        )
+    )
+
+
+@dataclass(frozen=True)
 class AppConfig:
     bot: BotConfig = field(default_factory=BotConfig)
     runner: RunnerConfig = field(default_factory=RunnerConfig)
     rate_limit: RateLimitConfig = field(default_factory=RateLimitConfig)
     webhook: WebhookConfig = field(default_factory=WebhookConfig)
+    donations: DonationsConfig = field(default_factory=DonationsConfig)
     db_path: str = field(
         default_factory=lambda: environ.get("DB_PATH", "data/acton_bot.db")
     )

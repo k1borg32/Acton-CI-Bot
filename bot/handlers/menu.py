@@ -82,6 +82,10 @@ def setup_menu_handler(
     are retry-able too."""
 
     router = Router(name="menu")
+    show_donate = bool(config.donations.ton_address)
+
+    def menu_kb():
+        return main_menu(show_donate=show_donate)
 
     # We need access to the same `_run_and_report` helper as /check, but
     # that's defined inside setup_check_handler. To avoid duplication we
@@ -143,7 +147,7 @@ def setup_menu_handler(
         await message.answer(
             format_start_message(),
             parse_mode="HTML",
-            reply_markup=main_menu(),
+            reply_markup=menu_kb(),
         )
 
     # ─────────────────── reply-keyboard button handlers ───────────────────
@@ -170,7 +174,7 @@ def setup_menu_handler(
         if last is None:
             await message.answer(
                 "🤷 No previous /check in this chat.\nTap 🔬 Check a repo first.",
-                reply_markup=main_menu(),
+                reply_markup=menu_kb(),
             )
             return
         await _run(message, last.url, last.ref)
@@ -193,7 +197,7 @@ def setup_menu_handler(
                 "📋 No subscriptions in this chat.\n\n"
                 "Admins can add: <code>/subscribe owner/repo</code>",
                 parse_mode="HTML",
-                reply_markup=main_menu(),
+                reply_markup=menu_kb(),
             )
         else:
             repos = [s.repo_full_name for s in subs]
@@ -226,7 +230,7 @@ def setup_menu_handler(
     async def cb_menu_root(call: CallbackQuery, state: FSMContext) -> None:
         await state.clear()
         await call.message.edit_text(
-            format_start_message(), parse_mode="HTML", reply_markup=main_menu(),
+            format_start_message(), parse_mode="HTML", reply_markup=menu_kb(),
         )
         await call.answer()
 
@@ -245,11 +249,23 @@ def setup_menu_handler(
         await call.message.answer(format_help_message(), parse_mode="HTML")
         await call.answer()
 
+    @router.callback_query(F.data == f"{CB_MENU}:donate")
+    async def cb_menu_donate(call: CallbackQuery) -> None:
+        from bot.handlers.donate import _format_donate
+        text, kb = _format_donate(config.donations)
+        await call.message.answer(
+            text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=kb,
+        )
+        await call.answer()
+
     @router.callback_query(F.data == CB_CANCEL)
     async def cb_cancel(call: CallbackQuery, state: FSMContext) -> None:
         await state.clear()
         await call.message.answer(
-            "❌ Cancelled.", parse_mode="HTML", reply_markup=main_menu(),
+            "❌ Cancelled.", parse_mode="HTML", reply_markup=menu_kb(),
         )
         await call.answer()
 
@@ -348,7 +364,7 @@ def setup_menu_handler(
                 "📋 No subscriptions in this chat.\n\n"
                 "Admins can add: <code>/subscribe owner/repo</code>",
                 parse_mode="HTML",
-                reply_markup=main_menu(),
+                reply_markup=menu_kb(),
             )
         else:
             repos = [s.repo_full_name for s in subs]
@@ -381,7 +397,7 @@ def setup_menu_handler(
                 try:
                     await call.message.edit_text(
                         "📋 No subscriptions left in this chat.",
-                        reply_markup=main_menu(),
+                        reply_markup=menu_kb(),
                     )
                 except Exception:
                     pass

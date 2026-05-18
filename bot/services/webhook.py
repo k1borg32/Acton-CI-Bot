@@ -61,6 +61,23 @@ class WebhookJob:
     base_ref: str | None = None        # PR base SHA, for gas-diff baseline
 
 
+# Per-repo locks so a single noisy repo can't monopolize the global
+# concurrency pool. Only one webhook job per repo runs at a time; newer
+# events queue behind the older one (capped at 1 waiter — beyond that we
+# drop on the floor since GitHub will resend on the next push).
+_repo_locks: dict[str, asyncio.Lock] = {}
+_repo_locks_mutex = asyncio.Lock()
+
+
+async def _get_repo_lock(full_name: str) -> asyncio.Lock:
+    async with _repo_locks_mutex:
+        lock = _repo_locks.get(full_name)
+        if lock is None:
+            lock = asyncio.Lock()
+            _repo_locks[full_name] = lock
+        return lock
+
+
 def _verify_signature(secret: str, body: bytes, header: str | None) -> bool:
     """Constant-time HMAC-SHA256 check against GitHub's signature header."""
     if not header or not header.startswith("sha256="):
@@ -145,21 +162,41 @@ async def _run_and_fan_out(
         "webhook job: %s PR#%d head=%s → %d chat(s)",
         job.repo.full_name, job.pr_number, job.ref[:7], len(job.chat_ids),
     )
-    # Use a synthetic user id so per-user limits don't gate webhooks; the
-    # global semaphore still applies.
+
+    # Use a synthetic user id derived from repo so per-repo daily/hourly
+    # quotas apply consistently across webhook events for the same repo.
     synthetic_user_id = -1 * abs(hash(job.repo.full_name)) % 10_000_000
 
+    # Per-repo lock: one webhook job per repo at a time. Without this, a
+    # noisy repo would consume more than its fair share of the global
+    # concurrency pool. If somebody pushes 3 commits in 5s, we run them
+    # serially per repo.
+    repo_lock = await _get_repo_lock(job.repo.full_name)
+    async with repo_lock:
+        await _run_under_locks(job, bot, config, queue, stats, gh, synthetic_user_id)
+
+
+async def _run_under_locks(
+    job: WebhookJob,
+    bot: Bot,
+    config: AppConfig,
+    queue: JobQueue,
+    stats: Stats,
+    gh: GitHubClient,
+    synthetic_user_id: int,
+) -> None:
     try:
-        await queue.acquire(synthetic_user_id)
+        await queue.acquire(synthetic_user_id, source="webhook")
     except Exception as e:
-        # Rate-limited at the global level — surface a tiny notice and bail
+        # Rate-limited (hourly/daily/global cap) — surface a tiny notice and bail
         logger.warning("webhook rate-limited: %s", e)
         for chat_id in job.chat_ids:
             try:
                 await bot.send_message(
                     chat_id,
-                    f"⏳ Queue is full — PR #{job.pr_number} in "
-                    f"<code>{job.repo.full_name}</code> will retry shortly.",
+                    f"⏳ Bot is at capacity — PR #{job.pr_number} in "
+                    f"<code>{job.repo.full_name}</code> was skipped.\n"
+                    "Push again or use /retry once limits reset.",
                     parse_mode="HTML",
                 )
             except Exception:

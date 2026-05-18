@@ -1,8 +1,11 @@
 # Acton CI-Bot
 
-A Telegram bot that runs the official [Acton CLI](https://github.com/ton-blockchain/acton)
-(TON smart-contract toolkit for Tolk) against any public GitHub/GitLab/Bitbucket
-repo and posts a CI report back to the chat.
+A free, public Telegram bot that runs the official
+[Acton CLI](https://github.com/ton-blockchain/acton) (TON smart-contract
+toolkit for Tolk) against any public GitHub/GitLab/Bitbucket repo and
+posts a CI report back to the chat.
+
+Built on a single VPS by a single developer. Free to use; donations help.
 
 Two ways to use it:
 
@@ -168,9 +171,12 @@ All bot configuration is via environment variables (or `.env`).
 | `CLONE_TIMEOUT` | `60` | `git clone` timeout (seconds) |
 | `BUILD_TIMEOUT` | `180` | Per-step timeout (seconds) |
 | `MAX_REPO_SIZE_KB` | `51200` | Repo-size limit (50 MB) |
-| `MAX_CHECKS_PER_HOUR` | `5` | Per-user `/check` quota |
+| `MAX_CHECKS_PER_HOUR` | `5` | Per-user `/check` quota (60 min window) |
+| `MAX_CHECKS_PER_DAY` | `30` | Per-user `/check` quota (24 h window) |
 | `MAX_CONCURRENT_PER_USER` | `1` | Per-user in-flight cap |
 | `MAX_CONCURRENT_GLOBAL` | `3` | Global in-flight cap |
+| `MAX_CHECKS_GLOBAL_PER_DAY` | `1000` | Capacity guard for the host (24 h window) |
+| `DONATE_TON_ADDRESS` | `""` | If set, enables `/donate` + main-menu button |
 | `DB_PATH` | `data/acton_bot.db` | SQLite subscription DB |
 | `GITHUB_WEBHOOK_SECRET` | `""` | HMAC secret for `POST /webhooks/github`. Empty = endpoint always 500s |
 | `WEBHOOK_HOST` | `0.0.0.0` | HTTP bind host |
