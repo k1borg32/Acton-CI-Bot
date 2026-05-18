@@ -164,7 +164,7 @@ All bot configuration is via environment variables (or `.env`).
 |---|---|---|
 | `BOT_TOKEN` | *(required)* | Telegram bot token from @BotFather |
 | `ADMIN_IDS` | `""` | Comma-separated Telegram user IDs allowed to manage subscriptions / run `/admin` |
-| `ACTON_DOCKER_IMAGE` | `acton-runner:latest` | The image the bot spawns for each step |
+| `ACTON_DOCKER_IMAGE` | `ghcr.io/k1borg32/acton-ci-bot/acton-runner:latest` | The image the bot spawns for each step. Default points at GHCR so Docker auto-pulls when the local tag is missing (Coolify-style hosts periodically prune unused images). Override with a local tag if you've built it yourself. |
 | `CONTAINER_MEMORY` | `512m` | Runner RAM cap |
 | `CONTAINER_CPUS` | `1` | Runner CPU cap |
 | `CONTAINER_PIDS_LIMIT` | `256` | Runner pid cap |

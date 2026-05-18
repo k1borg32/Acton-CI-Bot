@@ -22,7 +22,13 @@ class BotConfig:
 class RunnerConfig:
     docker_image: str = field(
         default_factory=lambda: environ.get(
-            "ACTON_DOCKER_IMAGE", "acton-runner:latest"
+            "ACTON_DOCKER_IMAGE",
+            # Default to the GHCR-hosted image so `docker run` auto-pulls
+            # when the local tag is missing. Coolify periodically prunes
+            # unused local images; relying on a bare `acton-runner:latest`
+            # tag breaks after every redeploy. The bot's own image is at
+            # ghcr.io/k1borg32/acton-ci-bot/bot:latest.
+            "ghcr.io/k1borg32/acton-ci-bot/acton-runner:latest",
         )
     )
     container_memory: str = field(
