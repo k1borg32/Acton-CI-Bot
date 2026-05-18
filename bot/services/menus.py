@@ -11,7 +11,40 @@ from __future__ import annotations
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
 )
+
+
+# Reply-keyboard button labels — used both for the keyboard factory AND
+# for matching messages in the menu handler. Exporting as constants keeps
+# the two in sync.
+BTN_CHECK = "🔬 Check a repo"
+BTN_RETRY = "🔁 Retry last"
+BTN_TOOLS = "🛠 Tools"
+BTN_SUBS = "📋 Subscriptions"
+BTN_STATUS = "📊 Status"
+BTN_HELP = "❓ Help"
+
+
+def main_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Persistent button bar at the bottom of the chat. Tapping a button
+    sends its label as a message; the menu handler matches on the text."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN_CHECK), KeyboardButton(text=BTN_RETRY)],
+            [KeyboardButton(text=BTN_TOOLS), KeyboardButton(text=BTN_SUBS)],
+            [KeyboardButton(text=BTN_STATUS), KeyboardButton(text=BTN_HELP)],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Tap a button or paste a repo URL…",
+    )
+
+
+def hide_reply_keyboard() -> ReplyKeyboardRemove:
+    return ReplyKeyboardRemove()
 
 
 # Callback-data prefixes (terse to stay under the 64-byte cap)

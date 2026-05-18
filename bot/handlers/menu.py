@@ -24,6 +24,12 @@ from aiogram.types import CallbackQuery, Message
 from bot.config import AppConfig
 from bot.services.formatter import format_help_message, format_start_message
 from bot.services.menus import (
+    BTN_CHECK,
+    BTN_HELP,
+    BTN_RETRY,
+    BTN_STATUS,
+    BTN_SUBS,
+    BTN_TOOLS,
     CB_CANCEL,
     CB_CHECK,
     CB_MENU,
@@ -33,6 +39,7 @@ from bot.services.menus import (
     cancel_only,
     check_ref_prompt,
     main_menu,
+    main_reply_keyboard,
     subscriptions_list,
     tools_menu,
 )
@@ -130,10 +137,88 @@ def setup_menu_handler(
     async def cmd_menu(message: Message, state: FSMContext) -> None:
         await state.clear()
         await message.answer(
+            "Tap any button below — they stay there the whole time.",
+            reply_markup=main_reply_keyboard(),
+        )
+        await message.answer(
             format_start_message(),
             parse_mode="HTML",
             reply_markup=main_menu(),
         )
+
+    # ─────────────────── reply-keyboard button handlers ───────────────────
+    # These match plain-text messages whose body matches a keyboard label.
+    # Registered before the FSM state handlers below, so tapping a button
+    # during an FSM flow cleanly aborts the flow and starts the new action.
+
+    @router.message(F.text == BTN_CHECK)
+    async def btn_check(message: Message, state: FSMContext) -> None:
+        await state.set_state(CheckFSM.waiting_for_repo)
+        await message.answer(
+            "📥 Send the repo to check.\n\n"
+            "Examples:\n"
+            "<code>owner/repo</code>\n"
+            "<code>https://github.com/owner/repo</code>",
+            parse_mode="HTML",
+            reply_markup=cancel_only(),
+        )
+
+    @router.message(F.text == BTN_RETRY)
+    async def btn_retry(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        last = last_check_state.get(message.chat.id)
+        if last is None:
+            await message.answer(
+                "🤷 No previous /check in this chat.\nTap 🔬 Check a repo first.",
+                reply_markup=main_menu(),
+            )
+            return
+        await _run(message, last.url, last.ref)
+
+    @router.message(F.text == BTN_TOOLS)
+    async def btn_tools(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await message.answer(
+            "🛠 <b>Tools</b>\nPick one:",
+            parse_mode="HTML",
+            reply_markup=tools_menu(),
+        )
+
+    @router.message(F.text == BTN_SUBS)
+    async def btn_subs(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        subs = subscriptions.list_for_chat(message.chat.id)
+        if not subs:
+            await message.answer(
+                "📋 No subscriptions in this chat.\n\n"
+                "Admins can add: <code>/subscribe owner/repo</code>",
+                parse_mode="HTML",
+                reply_markup=main_menu(),
+            )
+        else:
+            repos = [s.repo_full_name for s in subs]
+            await message.answer(
+                "📋 <b>Subscriptions</b>\n"
+                "<i>Tap a row to unsubscribe (admin only).</i>",
+                parse_mode="HTML",
+                reply_markup=subscriptions_list(repos),
+            )
+
+    @router.message(F.text == BTN_STATUS)
+    async def btn_status(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await message.answer(
+            f"📊 <b>Queue status</b>\n\n"
+            f"🔄 Active jobs: <b>{queue.active_jobs}</b>\n"
+            f"📋 Queued: <b>{queue.pending_jobs}</b>",
+            parse_mode="HTML",
+        )
+
+    @router.message(F.text == BTN_HELP)
+    async def btn_help(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        from bot.services.formatter import format_help_message
+        await message.answer(format_help_message(), parse_mode="HTML")
 
     # ─────────────────── main-menu callbacks ───────────────────
 

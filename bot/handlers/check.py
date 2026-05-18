@@ -12,7 +12,7 @@ import logging
 from dataclasses import dataclass
 
 from aiogram import Router, F
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.types import Message
 
 from bot.config import AppConfig
@@ -191,10 +191,16 @@ def setup_check_handler(
         )
         await _run_and_report(message, repo_info, last.ref)
 
-    # Plain URL message → behave like /check
-    @router.message(F.text.startswith("https://github.com/")
-                    | F.text.startswith("https://gitlab.com/")
-                    | F.text.startswith("https://bitbucket.org/"))
+    # Plain URL message → behave like /check.
+    # StateFilter(None) ensures this only fires when no FSM flow is active —
+    # otherwise a URL pasted mid-wizard would be intercepted here instead
+    # of completing the wizard step.
+    @router.message(
+        StateFilter(None),
+        F.text.startswith("https://github.com/")
+        | F.text.startswith("https://gitlab.com/")
+        | F.text.startswith("https://bitbucket.org/"),
+    )
     async def handle_plain_url(message: Message) -> None:
         if message.text:
             message.text = f"/check {message.text.strip()}"
